@@ -1,0 +1,12 @@
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+backend/.env
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+data/*
+recovered/*

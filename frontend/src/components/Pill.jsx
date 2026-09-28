@@ -1,0 +1,1 @@
+export default function Pill({value,tone="neutral"}){return <span className={`pill ${tone}`}>{value||"—"}</span>}

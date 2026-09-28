@@ -1,0 +1,1 @@
+export default function Metric({label,value,hint}){return <div className="metric"><div className="mlabel">{label}</div><div className="mvalue">{value}</div><div className="mhint">{hint}</div></div>}

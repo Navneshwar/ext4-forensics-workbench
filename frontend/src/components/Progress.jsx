@@ -1,0 +1,1 @@
+export default function Progress({value}){let p=Math.max(0,Math.min(100,Number(value||0)));return <div className="progress"><div className="track"><div className="fill" style={{width:`${p}%`}}/></div><b>{p.toFixed(1)}%</b></div>}
