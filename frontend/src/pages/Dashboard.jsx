@@ -16,6 +16,17 @@ function tone(value) {
   return "neutral";
 }
 
+const PIPELINE_STAGES = [
+  "hash_pre",
+  "inode_scan",
+  "directory_scan",
+  "journal",
+  "artifacts",
+  "findings",
+  "hash_post",
+  "complete",
+];
+
 export default function Dashboard() {
   const [form, setForm] = useState({
     caseName: "EXT4 recovery case",
@@ -164,46 +175,47 @@ export default function Dashboard() {
     Boolean(scan?.post_scan_sha256) &&
     scan.pre_scan_sha256 === scan.post_scan_sha256;
 
+  // Derive pipeline step state purely from stage order — no new state.
+  const activeIdx = scan ? PIPELINE_STAGES.indexOf(scan.stage) : -1;
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">✓</div>
           <div>
-            <div className="brand-title">EXT4 FORENSICS</div>
-            <div className="brand-subtitle">Deleted File Recovery Workbench</div>
+            <div className="brand-title">EXT4 Forensics Workbench</div>
+            <div className="brand-subtitle">Deleted File Recovery</div>
           </div>
         </div>
-        <div className="topbar-status">
-          <span className="online-dot" />
+        <div className="topbar-meta">
+          <span className="online-dot" aria-hidden="true" />
           Local analysis · Windows
         </div>
       </header>
 
       <main className="content">
-        <section className="hero">
-          <div>
-            <div className="eyebrow">CYBER FORENSICS CAPSTONE · LAB #02</div>
+        <div className="page-header">
+          <div className="page-header-text">
             <h1>Recover. Correlate. Validate.</h1>
             <p>
               Analyze EXT4 metadata, recover deleted content, preserve evidence
               integrity, and export a forensic report.
             </p>
           </div>
-          <div className="hero-symbol">EXT4</div>
-        </section>
+          <Pill value="Read-only" tone="good" />
+        </div>
 
         <section className="two-col">
-          <section className="panel">
+          <section className="panel" aria-labelledby="evidence-heading">
             <div className="section-head">
               <div>
-                <div className="kicker">01 · EVIDENCE</div>
-                <h2>Start a forensic analysis</h2>
+                <div className="kicker">01 · Evidence</div>
+                <h2 id="evidence-heading">Start a forensic analysis</h2>
               </div>
-              <Pill value="READ-ONLY" tone="good" />
             </div>
 
-            <div className="safety">
+            <div className="safety" role="note">
               <strong>Evidence protection</strong>
               <span>The original image is not modified. Recovered files and reports are stored separately.</span>
             </div>
@@ -233,18 +245,18 @@ export default function Dashboard() {
               </button>
             </form>
 
-            {error && <div className="alert bad">{error}</div>}
+            {error && <div className="alert bad" role="alert">{error}</div>}
           </section>
 
-          <section className="panel">
+          <section className="panel" aria-labelledby="resources-heading">
             <div className="section-head">
               <div>
-                <div className="kicker">02 · RESOURCES</div>
-                <h2>Laptop-safe controls</h2>
+                <div className="kicker">02 · Resources</div>
+                <h2 id="resources-heading">Laptop-safe controls</h2>
               </div>
             </div>
 
-            <div className="mode-row">
+            <div className="mode-row" role="group" aria-label="Worker preset">
               <button className="mode active" onClick={() => setWorkers({ io: 1, hash: 2 })}>
                 Laptop
               </button>
@@ -286,7 +298,7 @@ export default function Dashboard() {
                 <Progress value={resources?.ram_percent} />
               </div>
               <div className="recommend">
-                Recommended now: I/O {resources?.recommended_io_workers ?? "—"} · Hash {resources?.recommended_hash_workers ?? "—"}
+                Recommended: I/O {resources?.recommended_io_workers ?? "—"} · Hash {resources?.recommended_hash_workers ?? "—"}
               </div>
             </div>
           </section>
@@ -294,42 +306,47 @@ export default function Dashboard() {
 
         {scan && (
           <>
-            <section className="metric-grid">
+            <section className="metric-grid" aria-label="Scan metrics">
               <Metric label="Status" value={<Pill value={scan.status} tone={tone(scan.status)} />} hint={scan.stage} />
               <Metric label="Progress" value={`${Number(scan.progress).toFixed(1)}%`} hint={scan.message} />
               <Metric label="Evidence" value={`${(Number(scan.size_bytes || 0) / 1024 / 1024).toFixed(1)} MB`} hint={`${scan.io_workers} I/O · ${scan.hash_workers} hash`} />
               <Metric label="Deleted candidates" value={findings.length} hint={`${recoverable.length} regular files`} />
             </section>
 
-            <section className="panel">
+            <section className="panel" aria-labelledby="analysis-heading">
               <div className="section-head">
                 <div>
-                  <div className="kicker">03 · ANALYSIS</div>
-                  <h2>Pipeline</h2>
+                  <div className="kicker">03 · Analysis</div>
+                  <h2 id="analysis-heading">Pipeline</h2>
                 </div>
                 <span className="mono">{scan.stage}</span>
               </div>
 
               <Progress value={scan.progress} />
 
-              <div className="pipeline">
-                {["hash_pre", "inode_scan", "directory_scan", "journal", "artifacts", "findings", "hash_post", "complete"].map((stage) => (
-                  <div key={stage} className={`pipeline-step ${scan.stage === stage ? "active" : ""}`}>
-                    <span className="dot" />
-                    {stage.replaceAll("_", " ")}
-                  </div>
-                ))}
-              </div>
+              <nav className="pipeline" aria-label="Pipeline stages">
+                {PIPELINE_STAGES.map((stage, idx) => {
+                  const isDone = activeIdx >= 0 && idx < activeIdx;
+                  const isActive = scan.stage === stage;
+                  const stageClass = `pipeline-step${isDone ? " done" : ""}${isActive ? " active" : ""}`;
+                  return (
+                    <div key={stage} className={stageClass} aria-current={isActive ? "step" : undefined}>
+                      <span className="dot" aria-hidden="true" />
+                      <span className="pipeline-step-label">{stage.replaceAll("_", " ")}</span>
+                    </div>
+                  );
+                })}
+              </nav>
 
-              <div className="status-message">{scan.message || "Waiting…"}</div>
+              <div className="status-message" aria-live="polite">{scan.message || "Waiting…"}</div>
             </section>
 
             {final && (
-              <section className="panel">
+              <section className="panel" aria-labelledby="recovery-heading">
                 <div className="section-head">
                   <div>
-                    <div className="kicker">04 · RECOVERY</div>
-                    <h2>Deleted files</h2>
+                    <div className="kicker">04 · Recovery</div>
+                    <h2 id="recovery-heading">Deleted files</h2>
                     <p>Recovered names and paths are conservative evidence-derived values.</p>
                   </div>
 
@@ -346,20 +363,20 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {message && <div className="alert good">{message}</div>}
+                {message && <div className="alert good" role="status">{message}</div>}
 
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th />
+                        <th aria-label="Select" />
                         <th>Inode</th>
                         <th>Name / path</th>
                         <th>Type</th>
-                        <th>Size</th>
+                        <th className="num">Size</th>
                         <th>Recovery</th>
                         <th>Validation</th>
-                        <th />
+                        <th aria-label="Download" />
                       </tr>
                     </thead>
                     <tbody>
@@ -371,15 +388,16 @@ export default function Dashboard() {
                               checked={selected.has(f.id)}
                               onChange={() => toggle(f.id)}
                               disabled={!f.recoverable || f.recovery_status === "complete"}
+                              aria-label={`Select ${f.original_name || f.name || f.inode}`}
                             />
                           </td>
                           <td className="mono">{f.inode}</td>
                           <td>
-                            <strong>{f.original_name || f.name}</strong>
-                            <small>{f.original_path || "Path not reconstructed"}</small>
+                            <strong title={f.original_name || f.name}>{f.original_name || f.name}</strong>
+                            <small title={f.original_path || "Path not reconstructed"}>{f.original_path || "Path not reconstructed"}</small>
                           </td>
                           <td>{f.file_signature || f.file_type}</td>
-                          <td>{Number(f.size_bytes || 0).toLocaleString()} B</td>
+                          <td className="num mono">{Number(f.size_bytes || 0).toLocaleString()} B</td>
                           <td><Pill value={f.recovery_status || "candidate"} tone={tone(f.recovery_status)} /></td>
                           <td><Pill value={f.validation_status || "pending"} tone={tone(f.validation_status)} /></td>
                           <td>
@@ -398,11 +416,11 @@ export default function Dashboard() {
             )}
 
             <section className="two-col">
-              <section className="panel">
+              <section className="panel" aria-labelledby="integrity-heading">
                 <div className="section-head">
                   <div>
-                    <div className="kicker">05 · INTEGRITY</div>
-                    <h2>Evidence hashes</h2>
+                    <div className="kicker">05 · Integrity</div>
+                    <h2 id="integrity-heading">Evidence hashes</h2>
                   </div>
                 </div>
 
@@ -424,11 +442,11 @@ export default function Dashboard() {
                 </div>
               </section>
 
-              <section className="panel">
+              <section className="panel" aria-labelledby="report-heading">
                 <div className="section-head">
                   <div>
-                    <div className="kicker">06 · REPORT</div>
-                    <h2>Export Lab #02 report</h2>
+                    <div className="kicker">06 · Report</div>
+                    <h2 id="report-heading">Export Lab #02 report</h2>
                   </div>
                 </div>
 
@@ -467,7 +485,8 @@ export default function Dashboard() {
       </main>
 
       <footer>
-        EXT4 Forensics Workbench v0.3.1 · Local-first · Evidence image remains read-only
+        <span>EXT4 Forensics Workbench v0.4.3 · Local-first · Evidence image remains read-only</span>
+        <span>Cyber Forensics Capstone · Lab #02</span>
       </footer>
     </div>
   );
