@@ -1,0 +1,2960 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+backend/
+  app/
+    api/
+      __init__.py
+      routes.py
+    core/
+      __init__.py
+      config.py
+      logging_config.py
+      resources.py
+    db/
+      __init__.py
+      database.py
+      repository.py
+    forensics/
+      __init__.py
+      directory_entries.py
+      ext4_scanner.py
+      ext4_structs.py
+      hashing.py
+      io.py
+      journal.py
+      partitions.py
+      pytsk_adapter.py
+      pytsk_artifacts.py
+      recovery.py
+      signatures.py
+    services/
+      __init__.py
+      artifact_service.py
+      docx_report.py
+      integrity_ledger.py
+      report_builder.py
+      scanner.py
+    __init__.py
+    main.py
+  data/
+    integrity-ledger.jsonl
+  recovered/
+    2c552ca3-7c65-4555-9888-d510f9745456/
+      inode_22_orion-report.pdf
+      inode_24_orion-export.zip
+      inode_25_orion-report.pdf
+    2da76da8-de76-49b2-9faa-9faab5c7e515/
+      inode_22_85e966b5.bin
+      inode_24_fc8f7370.bin
+      inode_25_30fbd162.bin
+    6369211d-78d2-4a57-bb4a-75d4d8642ce7/
+      inode_22_orion-report.pdf
+      inode_24_orion-export.zip
+      inode_25_orion-report.pdf
+    7a16375d-7683-41a6-be4b-ab5891b75cb0/
+      inode_22_orion-report.pdf
+      inode_24_orion-export.zip
+      inode_25_orion-report.pdf
+    aa4743d1-869b-478f-85f9-a84705e0f962/
+      inode_22_orion-report.pdf
+      inode_24_orion-export.zip
+      inode_25_orion-report.pdf
+  reports/
+    ext4-report-7a16375d.docx
+    ext4-report-aa4743d1.docx
+  scripts/
+    refresh_scan_artifacts.py
+  tests/
+    test_core.py
+    test_docx_report.py
+    test_docx_xml_safety.py
+    test_ext4_structs.py
+    test_signatures.py
+  tools/
+    __init__.py
+  .env.example
+  README.md
+  requirements.txt
+docs/
+  Lab02_Reference_Report_Validated.docx
+  LAB02_REPORT_STRUCTURE.md
+  Lab02_Report_Template.docx
+frontend/
+  src/
+    components/
+      Metric.jsx
+      MetricCard.jsx
+      Pill.jsx
+      Progress.jsx
+      ProgressBar.jsx
+      StatusPill.jsx
+    lib/
+      api.js
+    pages/
+      Dashboard.jsx
+    App.jsx
+    main.jsx
+    styles.css
+  index.html
+  package.json
+  vite.config.js
+scripts/
+  run_backend.ps1
+  run_backend.sh
+  run_frontend.ps1
+  run_frontend.sh
+.gitignore
+ARCHITECTURE.md
+README.md
+VERSION
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="backend/app/api/__init__.py">
+
+</file>
+
+<file path="backend/app/api/routes.py">
+from __future__ import annotations
+import json,os,uuid
+from pathlib import Path
+from fastapi import APIRouter,HTTPException
+from fastapi.responses import FileResponse,PlainTextResponse
+from pydantic import BaseModel,Field
+from app.core.config import settings
+from app.core.resources import snapshot
+from app.db.repository import get_case,get_finding,get_findings_by_ids,get_scan,insert_case,insert_evidence,insert_scan,list_findings,list_artifacts,list_timeline
+from app.forensics.hashing import sha256_file
+from app.services.integrity_ledger import verify_chain
+from app.services.scanner import submit_scan,recover_findings
+from app.services.report_builder import build_report
+from app.services.docx_report import generate_docx
+from app.services.artifact_service import refresh_artifacts
+
+router=APIRouter(prefix="/api")
+class ScanRequest(BaseModel):
+    image_path:str=Field(min_length=1,max_length=4096)
+    case_id:str|None=None
+    case_name:str=Field(default="EXT4 recovery case",min_length=1,max_length=120)
+    io_workers:int=Field(default=1,ge=1,le=8)
+    hash_workers:int=Field(default=2,ge=1,le=8)
+    resource_policy:str="laptop"
+class RecoverRequest(BaseModel):finding_ids:list[str]=Field(min_length=1,max_length=100)
+def norm(raw):
+    s=raw.strip()
+    while len(s)>=2 and s[0]==s[-1] and s[0] in {'"',"'"}:s=s[1:-1].strip()
+    return Path(os.path.expandvars(s)).expanduser()
+@router.get("/health")
+def health():return {"status":"ok","version":"0.4.0"}
+@router.get("/system/resources")
+def resources():return snapshot()
+@router.post("/scans")
+def create_scan(req:ScanRequest):
+    path=norm(req.image_path)
+    if not path.exists() or not path.is_file():raise HTTPException(400,f"Image file does not exist: {path}")
+    case_id=req.case_id
+    if case_id:
+        if not get_case(case_id):raise HTTPException(404,"Case not found.")
+    else:
+        case_id=str(uuid.uuid4());insert_case(case_id,req.case_name)
+    digest=sha256_file(path);evidence_id=str(uuid.uuid4());insert_evidence(evidence_id,case_id,str(path.resolve()),path.stat().st_size,digest)
+    io_w=min(settings.max_io_workers,max(1,req.io_workers));hash_w=min(settings.max_hash_workers,max(1,req.hash_workers))
+    scan_id=str(uuid.uuid4());insert_scan(scan_id,case_id,evidence_id,io_w,hash_w,req.resource_policy);submit_scan(scan_id,case_id,evidence_id)
+    return {"scan_id":scan_id,"case_id":case_id,"evidence_id":evidence_id,"sha256":digest,"path":str(path.resolve()),"io_workers":io_w,"hash_workers":hash_w}
+@router.get("/scans/{scan_id}")
+def scan_detail(scan_id):
+    row=get_scan(scan_id)
+    if not row:raise HTTPException(404,"Scan not found.")
+    return dict(row)
+@router.get("/scans/{scan_id}/findings")
+def findings(scan_id):
+    if not get_scan(scan_id):raise HTTPException(404,"Scan not found.")
+    return [dict(r) for r in list_findings(scan_id)]
+@router.get("/scans/{scan_id}/artifacts")
+def artifacts(scan_id):
+    if not get_scan(scan_id):raise HTTPException(404,"Scan not found.")
+    return {"artifacts":[dict(r) for r in list_artifacts(scan_id)],"timeline":[dict(r) for r in list_timeline(scan_id)]}
+@router.post("/scans/{scan_id}/artifacts/refresh")
+def artifact_refresh(scan_id):
+    try:return refresh_artifacts(scan_id,force=True)
+    except ValueError as e:raise HTTPException(404,str(e))
+    except Exception as e:raise HTTPException(500,f"Artifact extraction failed: {e}")
+@router.post("/scans/{scan_id}/recover")
+def recover(scan_id,req:RecoverRequest):
+    rows=get_findings_by_ids(req.finding_ids)
+    if not rows:raise HTTPException(404,"No findings selected.")
+    return {"scan_id":scan_id,"results":recover_findings(scan_id,rows)}
+@router.get("/findings/{finding_id}/download")
+def download(finding_id):
+    row=get_finding(finding_id)
+    if not row or not row["recovered_path"]:raise HTTPException(404,"Recovered file not found.")
+    p=Path(row["recovered_path"]).resolve()
+    try:p.relative_to(settings.recovery_dir.resolve())
+    except ValueError:raise HTTPException(403,"Recovered path is outside recovery directory.")
+    if not p.exists() or not p.is_file():raise HTTPException(404,"Recovered file does not exist.")
+    return FileResponse(str(p),filename=row["original_name"] or p.name,media_type="application/octet-stream")
+@router.get("/scans/{scan_id}/report.json")
+def report_json(scan_id):
+    try:r=build_report(scan_id)
+    except ValueError as e:raise HTTPException(404,str(e))
+    return PlainTextResponse(json.dumps(r,indent=2,ensure_ascii=False,default=str),media_type="application/json",headers={"Content-Disposition":f'attachment; filename="ext4-report-{scan_id[:8]}.json"'})
+@router.get("/scans/{scan_id}/report.docx")
+def report_docx(scan_id):
+    out=settings.report_dir/f"ext4-report-{scan_id[:8]}.docx"
+    try:generate_docx(scan_id,out)
+    except ValueError as e:raise HTTPException(404,str(e))
+    except Exception as e:raise HTTPException(500,f"DOCX report generation failed: {type(e).__name__}: {e}")
+    return FileResponse(str(out),filename=out.name,media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+@router.get("/cases/{case_id}/integrity")
+def integrity(case_id):
+    if not get_case(case_id):raise HTTPException(404,"Case not found.")
+    ok,msg,count=verify_chain();return {"verified":ok,"message":msg,"events":count}
+</file>
+
+<file path="backend/app/core/__init__.py">
+
+</file>
+
+<file path="backend/app/core/config.py">
+from __future__ import annotations
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+def _load_dotenv(path: Path):
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line=line.strip()
+        if not line or line.startswith("#") or "=" not in line: continue
+        k,v=line.split("=",1)
+        os.environ.setdefault(k.strip(),v.strip().strip('"').strip("'"))
+
+_load_dotenv(BASE_DIR/".env")
+
+def _int(name, default, lo=1, hi=1000000):
+    try: return max(lo,min(hi,int(os.getenv(name,str(default)))))
+    except ValueError: return default
+
+def _bool(name, default):
+    raw=os.getenv(name)
+    return default if raw is None else raw.lower() in {"1","true","yes","on"}
+
+def _path(name, default):
+    p=Path(os.getenv(name,default))
+    return p.resolve() if p.is_absolute() else (BASE_DIR/p).resolve()
+
+@dataclass(frozen=True)
+class Settings:
+    app_data_dir: Path
+    recovery_dir: Path
+    report_dir: Path
+    integrity_ledger: Path
+    max_io_workers: int
+    max_hash_workers: int
+    max_concurrent_scans: int
+    max_recovery_bytes: int
+    chunk_size: int
+    post_scan_verify: bool
+    journal_max_blocks: int
+    text_artifact_max_bytes: int
+
+def load_settings():
+    s=Settings(
+        app_data_dir=_path("APP_DATA_DIR","./data"),
+        recovery_dir=_path("RECOVERY_DIR","./recovered"),
+        report_dir=_path("REPORT_DIR","./reports"),
+        integrity_ledger=_path("INTEGRITY_LEDGER","./data/integrity-ledger.jsonl"),
+        max_io_workers=_int("MAX_IO_WORKERS",2,1,8),
+        max_hash_workers=_int("MAX_HASH_WORKERS",2,1,8),
+        max_concurrent_scans=_int("MAX_CONCURRENT_SCANS",1,1,2),
+        max_recovery_bytes=_int("MAX_RECOVERY_BYTES",10*1024**3,1,100*1024**3),
+        chunk_size=_int("CHUNK_SIZE_MB",4,1,64)*1024*1024,
+        post_scan_verify=_bool("POST_SCAN_VERIFY",True),
+        journal_max_blocks=_int("JOURNAL_MAX_BLOCKS",8192,100,1000000),
+        text_artifact_max_bytes=_int("TEXT_ARTIFACT_MAX_BYTES",1048576,4096,100*1024*1024),
+    )
+    for p in (s.app_data_dir,s.recovery_dir,s.report_dir,s.integrity_ledger.parent):
+        p.mkdir(parents=True,exist_ok=True)
+    return s
+
+settings=load_settings()
+</file>
+
+<file path="backend/app/core/logging_config.py">
+import logging
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+</file>
+
+<file path="backend/app/core/resources.py">
+from __future__ import annotations
+import os
+import psutil
+from app.core.config import settings
+
+def snapshot():
+    cpu=psutil.cpu_percent(interval=0.1)
+    vm=psutil.virtual_memory()
+    rss=psutil.Process(os.getpid()).memory_info().rss
+    if cpu>=90 or vm.percent>=88:
+        rec_io,rec_hash=1,1
+    elif cpu>=75 or vm.percent>=75:
+        rec_io,rec_hash=min(2,settings.max_io_workers),1
+    else:
+        rec_io,rec_hash=settings.max_io_workers,settings.max_hash_workers
+    return {
+        "cpu_percent":cpu,"ram_percent":vm.percent,"ram_used_bytes":vm.used,
+        "ram_total_bytes":vm.total,"ram_available_bytes":vm.available,
+        "process_rss_bytes":rss,"cpu_count":os.cpu_count() or 1,
+        "recommended_io_workers":rec_io,"recommended_hash_workers":rec_hash,
+        "limits":{"max_io_workers":settings.max_io_workers,"max_hash_workers":settings.max_hash_workers}
+    }
+</file>
+
+<file path="backend/app/db/__init__.py">
+
+</file>
+
+<file path="backend/app/db/database.py">
+from __future__ import annotations
+import sqlite3
+from contextlib import contextmanager
+from app.core.config import settings
+
+DB_PATH=settings.app_data_dir/"casebook.sqlite3"
+
+def _cols(conn,table): return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+def _add(conn,table,name,definition):
+    if name not in _cols(conn,table): conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA foreign_keys=ON")
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS cases(
+          id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at TEXT NOT NULL,notes TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS evidence(
+          id TEXT PRIMARY KEY,case_id TEXT NOT NULL,path TEXT NOT NULL,size_bytes INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,discovered_at TEXT NOT NULL,pre_scan_sha256 TEXT,post_scan_sha256 TEXT,
+          FOREIGN KEY(case_id) REFERENCES cases(id)
+        );
+        CREATE TABLE IF NOT EXISTS scans(
+          id TEXT PRIMARY KEY,case_id TEXT NOT NULL,evidence_id TEXT NOT NULL,status TEXT NOT NULL,
+          progress REAL DEFAULT 0,stage TEXT DEFAULT 'queued',message TEXT DEFAULT '',
+          started_at TEXT,finished_at TEXT,error TEXT,io_workers INTEGER,hash_workers INTEGER,
+          resource_policy TEXT DEFAULT 'laptop',
+          FOREIGN KEY(case_id) REFERENCES cases(id),FOREIGN KEY(evidence_id) REFERENCES evidence(id)
+        );
+        CREATE TABLE IF NOT EXISTS findings(
+          id TEXT PRIMARY KEY,scan_id TEXT NOT NULL,inode INTEGER,name TEXT,path TEXT,file_type TEXT,
+          size_bytes INTEGER,deletion_time TEXT,mode TEXT,confidence TEXT,recoverable INTEGER DEFAULT 0,
+          recovered_path TEXT,recovered_sha256 TEXT,validation_status TEXT,source TEXT DEFAULT 'inode',
+          metadata_json TEXT DEFAULT '{}',
+          FOREIGN KEY(scan_id) REFERENCES scans(id)
+        );
+        CREATE TABLE IF NOT EXISTS artifacts(
+          id TEXT PRIMARY KEY,scan_id TEXT NOT NULL,inode INTEGER,path TEXT,type TEXT,size_bytes INTEGER,
+          atime TEXT,mtime TEXT,ctime TEXT,dtime TEXT,content TEXT DEFAULT '',
+          content_sha256 TEXT,metadata_json TEXT DEFAULT '{}',
+          FOREIGN KEY(scan_id) REFERENCES scans(id)
+        );
+        CREATE TABLE IF NOT EXISTS timeline_events(
+          id TEXT PRIMARY KEY,scan_id TEXT NOT NULL,timestamp TEXT NOT NULL,local_time TEXT,
+          source TEXT,event TEXT,details TEXT,classification TEXT DEFAULT 'fact',
+          FOREIGN KEY(scan_id) REFERENCES scans(id)
+        );
+        CREATE TABLE IF NOT EXISTS integrity_events(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,case_id TEXT NOT NULL,evidence_id TEXT,scan_id TEXT,
+          event_type TEXT NOT NULL,algorithm TEXT,value TEXT,created_at TEXT NOT NULL,details TEXT DEFAULT '',
+          FOREIGN KEY(case_id) REFERENCES cases(id),FOREIGN KEY(evidence_id) REFERENCES evidence(id),
+          FOREIGN KEY(scan_id) REFERENCES scans(id)
+        );
+        """)
+        for name,definition in {
+          "original_name":"TEXT","original_path":"TEXT","file_signature":"TEXT",
+          "recovery_status":"TEXT","recovered_size_bytes":"INTEGER","confidence_score":"REAL",
+          "journal_evidence_json":"TEXT DEFAULT '[]'","validation_reason":"TEXT",
+          "original_name_candidates_json":"TEXT DEFAULT '[]'"
+        }.items(): _add(c,"findings",name,definition)
+        c.execute("PRAGMA user_version=3")
+
+@contextmanager
+def db_conn():
+    c=sqlite3.connect(DB_PATH)
+    c.row_factory=sqlite3.Row
+    c.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield c;c.commit()
+    finally: c.close()
+</file>
+
+<file path="backend/app/db/repository.py">
+from __future__ import annotations
+import json
+from datetime import datetime, timezone
+from app.db.database import db_conn
+
+def now_iso(): return datetime.now(timezone.utc).isoformat()
+
+def insert_case(i,name,notes=""):
+    with db_conn() as c:c.execute("INSERT INTO cases VALUES(?,?,?,?)",(i,name,now_iso(),notes))
+def get_case(i):
+    with db_conn() as c:return c.execute("SELECT * FROM cases WHERE id=?",(i,)).fetchone()
+def insert_evidence(i,case_id,path,size,digest):
+    with db_conn() as c:c.execute("INSERT INTO evidence (id,case_id,path,size_bytes,sha256,discovered_at,pre_scan_sha256) VALUES(?,?,?,?,?,?,?)",(i,case_id,path,size,digest,now_iso(),digest))
+def set_post_hash(evidence_id,digest):
+    with db_conn() as c:c.execute("UPDATE evidence SET post_scan_sha256=? WHERE id=?",(digest,evidence_id))
+def insert_scan(i,case_id,evidence_id,io_w,hash_w,policy):
+    with db_conn() as c:c.execute("INSERT INTO scans (id,case_id,evidence_id,status,progress,stage,message,io_workers,hash_workers,resource_policy) VALUES(?,?,?,?,?,?,?,?,?,?)",(i,case_id,evidence_id,"queued",0,"queued","",io_w,hash_w,policy))
+def update_scan(i,**kw):
+    allowed={"status","progress","stage","message","started_at","finished_at","error"};fields=[];vals=[]
+    for k,v in kw.items():
+        if k in allowed and v is not None:fields.append(f"{k}=?");vals.append(v)
+    if fields:
+        with db_conn() as c:c.execute(f"UPDATE scans SET {','.join(fields)} WHERE id=?",(*vals,i))
+def get_scan(i):
+    with db_conn() as c:return c.execute("SELECT s.*,e.path AS evidence_path,e.size_bytes,e.sha256 AS evidence_sha256,e.pre_scan_sha256,e.post_scan_sha256,c.name AS case_name FROM scans s JOIN evidence e ON e.id=s.evidence_id JOIN cases c ON c.id=s.case_id WHERE s.id=?",(i,)).fetchone()
+def insert_finding(f):
+    with db_conn() as c:c.execute("INSERT INTO findings (id,scan_id,inode,name,path,file_type,size_bytes,deletion_time,mode,confidence,recoverable,recovered_path,recovered_sha256,validation_status,source,metadata_json,original_name,original_path,file_signature,recovery_status,recovered_size_bytes,confidence_score,journal_evidence_json,validation_reason,original_name_candidates_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(f["id"],f["scan_id"],f.get("inode"),f.get("name"),f.get("path"),f.get("file_type"),f.get("size_bytes"),f.get("deletion_time"),f.get("mode"),f.get("confidence","medium"),int(bool(f.get("recoverable"))),f.get("recovered_path"),f.get("recovered_sha256"),f.get("validation_status"),f.get("source","inode"),json.dumps(f.get("metadata",{}),sort_keys=True),f.get("original_name"),f.get("original_path"),f.get("file_signature"),f.get("recovery_status"),f.get("recovered_size_bytes"),f.get("confidence_score"),json.dumps(f.get("journal_evidence",[]),sort_keys=True),f.get("validation_reason"),json.dumps(f.get("original_name_candidates",[]),sort_keys=True)))
+def update_finding(i,**kw):
+    allowed={"recovered_path","recovered_sha256","validation_status","confidence","recoverable","metadata_json","original_name","original_path","file_signature","recovery_status","recovered_size_bytes","confidence_score","journal_evidence_json","validation_reason","original_name_candidates_json"};fields=[];vals=[]
+    for k,v in kw.items():
+        if k in allowed:fields.append(f"{k}=?");vals.append(int(bool(v)) if k=="recoverable" else v)
+    if fields:
+        with db_conn() as c:c.execute(f"UPDATE findings SET {','.join(fields)} WHERE id=?",(*vals,i))
+def insert_artifact(a):
+    with db_conn() as c:c.execute("INSERT OR REPLACE INTO artifacts (id,scan_id,inode,path,type,size_bytes,atime,mtime,ctime,dtime,content,content_sha256,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(a["id"],a["scan_id"],a.get("inode"),a.get("path"),a.get("type"),a.get("size_bytes",a.get("size")),a.get("atime"),a.get("mtime"),a.get("ctime"),a.get("dtime"),a.get("content",""),a.get("content_sha256"),json.dumps(a.get("metadata",{}),sort_keys=True)))
+def insert_timeline(e):
+    with db_conn() as c:c.execute("INSERT INTO timeline_events (id,scan_id,timestamp,local_time,source,event,details,classification) VALUES(?,?,?,?,?,?,?,?)",(e["id"],e["scan_id"],e.get("timestamp") or "",e.get("local_time"),e.get("source"),e.get("event"),e.get("details",""),e.get("classification","fact")))
+def list_findings(scan_id):
+    with db_conn() as c:return c.execute("SELECT * FROM findings WHERE scan_id=? ORDER BY inode,id",(scan_id,)).fetchall()
+def list_artifacts(scan_id):
+    with db_conn() as c:return c.execute("SELECT * FROM artifacts WHERE scan_id=? ORDER BY path",(scan_id,)).fetchall()
+def list_timeline(scan_id):
+    with db_conn() as c:return c.execute("SELECT * FROM timeline_events WHERE scan_id=? ORDER BY CASE WHEN timestamp='' THEN '9999' ELSE timestamp END,id",(scan_id,)).fetchall()
+def list_integrity(case_id):
+    with db_conn() as c:return c.execute("SELECT * FROM integrity_events WHERE case_id=? ORDER BY id",(case_id,)).fetchall()
+def get_finding(i):
+    with db_conn() as c:return c.execute("SELECT * FROM findings WHERE id=?",(i,)).fetchone()
+def get_findings_by_ids(ids):
+    ids=list(ids)
+    if not ids:return []
+    q=",".join("?" for _ in ids)
+    with db_conn() as c:return c.execute(f"SELECT * FROM findings WHERE id IN ({q})",ids).fetchall()
+def insert_integrity(e):
+    with db_conn() as c:c.execute("INSERT INTO integrity_events (case_id,evidence_id,scan_id,event_type,algorithm,value,created_at,details) VALUES(?,?,?,?,?,?,?,?)",(e["case_id"],e.get("evidence_id"),e.get("scan_id"),e["event_type"],e.get("algorithm"),e.get("value"),now_iso(),e.get("details","")))
+def clear_artifacts(scan_id):
+    with db_conn() as c:
+        c.execute("DELETE FROM artifacts WHERE scan_id=?",(scan_id,))
+        c.execute("DELETE FROM timeline_events WHERE scan_id=?",(scan_id,))
+</file>
+
+<file path="backend/app/forensics/__init__.py">
+
+</file>
+
+<file path="backend/app/forensics/directory_entries.py">
+from __future__ import annotations
+from dataclasses import dataclass
+from app.forensics.ext4_structs import EXT4_EXTENTS_FL,extents,legacy_blocks
+from app.forensics.io import ReadOnlyImage
+
+@dataclass(frozen=True)
+class Dirent:
+    parent_inode:int;inode:int;name:str;offset:int;source:str
+
+def plausible(raw):
+    if not raw or len(raw)>255:return False
+    bad=sum(1 for b in raw if b==0 or (b<32 and b not in (9,)))
+    return bad<=max(1,len(raw)//20)
+
+def parse_block(block,parent,base=0):
+    out=[];o=0
+    while o+8<=len(block):
+        ino=int.from_bytes(block[o:o+4],"little");rec=int.from_bytes(block[o+4:o+6],"little")
+        nlen=block[o+6]
+        if rec<8 or rec%4 or o+rec>len(block):break
+        if ino and 0<nlen<=rec-8:
+            raw=block[o+8:o+8+nlen]
+            if plausible(raw):
+                out.append(Dirent(parent,ino,raw.decode("utf-8","replace"),base+o,"active_dirent"))
+        o+=rec
+    return out
+
+def heuristic(block,parent,base=0):
+    out=[]
+    for o in range(0,max(0,len(block)-8),4):
+        ino=int.from_bytes(block[o:o+4],"little");rec=int.from_bytes(block[o+4:o+6],"little");nlen=block[o+6]
+        if not ino or rec<8 or rec%4 or o+rec>len(block) or not nlen or nlen>rec-8 or nlen>255:continue
+        raw=block[o+8:o+8+nlen]
+        name=raw.decode("utf-8","replace") if plausible(raw) else ""
+        if name and name not in {".",".."}:out.append(Dirent(parent,ino,name,base+o,"slack_heuristic"))
+    seen=set();u=[]
+    for e in out:
+        k=(e.parent_inode,e.inode,e.name,e.offset)
+        if k not in seen:seen.add(k);u.append(e)
+    return u
+
+def adapter(reader):
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    return A()
+
+def directory_content(reader,sb,fs_offset,inode,data):
+    remain=max(0,inode.size);parts=[]
+    if not remain:return b""
+    if inode.flags & EXT4_EXTENTS_FL:
+        blocks=extents(adapter(reader),sb,data,fs_offset)
+        for ex in blocks:
+            if ex.unwritten:continue
+            for i in range(ex.length):
+                if remain<=0:break
+                b=reader.read_at(fs_offset+(ex.physical+i)*sb.block_size,min(sb.block_size,remain))
+                if not b:break
+                parts.append(b);remain-=len(b)
+    else:
+        for bno in legacy_blocks(adapter(reader),sb,data,fs_offset):
+            if remain<=0:break
+            b=reader.read_at(fs_offset+bno*sb.block_size,min(sb.block_size,remain))
+            if not b:break
+            parts.append(b);remain-=len(b)
+    return b"".join(parts)[:inode.size]
+
+def build_index(reader,sb,fs_offset,directories):
+    names={};children_by_parent={}
+    for inode in directories:
+        try:
+            data=reader.read_at(inode.offset,sb.inode_size)
+            content=directory_content(reader,sb,fs_offset,inode,data)
+        except Exception:continue
+        if not content:continue
+        entries=[]
+        for start in range(0,len(content),sb.block_size):
+            blk=content[start:start+sb.block_size]
+            entries.extend(parse_block(blk,inode.inode,start))
+            entries.extend(heuristic(blk,inode.inode,start))
+        for e in entries:
+            if e.name not in {".",".."}:
+                names.setdefault(e.inode,[]).append({"name":e.name,"parent_inode":e.parent_inode,"source":e.source,"offset":e.offset})
+                children_by_parent.setdefault(e.parent_inode,[]).append(e)
+    return {"names_by_inode":names,"children_by_parent":children_by_parent}
+</file>
+
+<file path="backend/app/forensics/ext4_scanner.py">
+from __future__ import annotations
+import struct
+from concurrent.futures import ThreadPoolExecutor,as_completed
+from pathlib import Path
+from threading import Lock
+from app.core.config import settings
+from app.forensics.ext4_structs import read_superblock,group_inode_table,parse_inode
+from app.forensics.io import ReadOnlyImage
+from app.forensics.partitions import detect
+
+def adapter(reader):
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    return A()
+
+def find_offsets(path):
+    offsets=[0]+[p.start for p in detect(path)]
+    valid=[]
+    with Path(path).open("rb",buffering=0) as f:
+        for off in sorted(set(offsets)):
+            try: read_superblock(f,off);valid.append(off)
+            except (OSError,ValueError,struct.error):pass
+    return valid
+
+def _group(reader,sb,fs_offset,g):
+    table=group_inode_table(adapter(reader),sb,fs_offset,g)
+    table_bytes=sb.inodes_per_group*sb.inode_size
+    raw=reader.read_at(table,table_bytes)
+    deleted=[];dirs=[]
+    slots=min(sb.inodes_per_group,len(raw)//sb.inode_size);base=g*sb.inodes_per_group+1
+    for i in range(slots):
+        off=table+i*sb.inode_size;data=raw[i*sb.inode_size:(i+1)*sb.inode_size]
+        try:ino=parse_inode(data,base+i,g,off)
+        except Exception:continue
+        if ino.mode and ino.file_type=="directory":dirs.append(ino)
+        if ino.mode and ino.deletion_time and ino.file_type in {"regular","directory","symlink"}:deleted.append(ino)
+    return deleted,dirs
+
+def scan(path,workers,progress=None):
+    path=Path(path);offs=find_offsets(path)
+    if not offs:raise ValueError("No EXT4 filesystem found.")
+    fs_offset=offs[0];reader=ReadOnlyImage(path);sb=read_superblock(adapter(reader),fs_offset)
+    meta={"filesystem":"ext4","volume_label":sb.label,"uuid":sb.uuid,"filesystem_offset":fs_offset,
+          "block_size":sb.block_size,"inode_size":sb.inode_size,"inodes_count":sb.inodes_count,
+          "blocks_count":sb.blocks_count,"inodes_per_group":sb.inodes_per_group,
+          "groups":sb.groups,"journal_inode":sb.journal_inum,
+          "features":{"compat":f"0x{sb.feature_compat:08x}",
+                      "incompat":f"0x{sb.feature_incompat:08x}",
+                      "ro_compat":f"0x{sb.feature_ro_compat:08x}"}}
+    deleted=[];dirs=[];done=0;lock=Lock()
+    with ThreadPoolExecutor(max_workers=max(1,min(workers,sb.groups,settings.max_io_workers)),thread_name_prefix="inode") as ex:
+        futs=[ex.submit(_group,reader,sb,fs_offset,g) for g in range(sb.groups)]
+        for f in as_completed(futs):
+            d,di=f.result();deleted.extend(d);dirs.extend(di)
+            with lock:done+=1;c=done
+            if progress:progress(min(78,8+c/max(1,sb.groups)*70),"inode_scan",f"Scanned inode group {c:,} / {sb.groups:,}")
+    deleted.sort(key=lambda x:x.inode);dirs.sort(key=lambda x:x.inode)
+    return meta,deleted,dirs,fs_offset,sb
+</file>
+
+<file path="backend/app/forensics/ext4_structs.py">
+from __future__ import annotations
+import struct
+from dataclasses import dataclass
+from datetime import datetime,timezone
+EXT4_MAGIC=0xEF53;EXTENT_MAGIC=0xF30A;EXT4_EXTENTS_FL=0x00080000
+S_IFMT=0xF000;S_IFREG=0x8000;S_IFDIR=0x4000;S_IFLNK=0xA000
+JBD2_MAGIC=0xC03B3998
+JBD2_DESCRIPTOR_BLOCK=1;JBD2_COMMIT_BLOCK=2;JBD2_SUPERBLOCK_V1=3;JBD2_SUPERBLOCK_V2=4;JBD2_REVOKE_BLOCK=5
+def u16(b,o):return struct.unpack_from("<H",b,o)[0]
+def u32(b,o):return struct.unpack_from("<I",b,o)[0]
+def u64(b,o):return struct.unpack_from("<Q",b,o)[0]
+def iso(v):
+    if not v:return None
+    try:return datetime.fromtimestamp(v,tz=timezone.utc).isoformat()
+    except (ValueError,OverflowError,OSError):return None
+@dataclass(frozen=True)
+class Superblock:
+    offset:int;inodes_count:int;blocks_count:int;block_size:int;blocks_per_group:int;inodes_per_group:int;inode_size:int
+    feature_compat:int;feature_incompat:int;feature_ro_compat:int;journal_inum:int;desc_size:int;label:str;uuid:str
+    @property
+    def groups(self):return (self.blocks_count+self.blocks_per_group-1)//self.blocks_per_group
+def parse_superblock(data,offset=0):
+    if len(data)<256 or u16(data,56)!=EXT4_MAGIC:raise ValueError("EXT4 superblock not found")
+    log=u32(data,24);blocks=u32(data,4)|(u32(data,336)<<32 if len(data)>=340 else 0)
+    label=data[120:136].split(b"\0",1)[0].decode("utf-8","replace")
+    raw_uuid=data[104:120].hex()
+    uuid=f"{raw_uuid[0:8]}-{raw_uuid[8:12]}-{raw_uuid[12:16]}-{raw_uuid[16:20]}-{raw_uuid[20:32]}"
+    return Superblock(offset,u32(data,0),blocks,1024<<log,u32(data,32),u32(data,40),
+                      u16(data,88) or 256,u32(data,92),u32(data,96),u32(data,100),u32(data,224),
+                      max(u16(data,254) or 32,32),label,uuid)
+def read_superblock(fh,offset):
+    fh.seek(offset+1024);return parse_superblock(fh.read(1024),offset)
+def _adapter(reader):
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    return A()
+def group_inode_table(fh,sb,fs_offset,group):
+    first=2 if sb.block_size==1024 else 1
+    fh.seek(fs_offset+first*sb.block_size+group*sb.desc_size);d=fh.read(sb.desc_size)
+    if len(d)<32:raise ValueError("Group descriptor truncated")
+    return fs_offset+(u32(d,8)|(u32(d,48)<<32 if sb.desc_size>=64 and len(d)>=52 else 0))*sb.block_size
+@dataclass(frozen=True)
+class Inode:
+    inode:int;group:int;offset:int;mode:int;size:int;deletion_time:int;links_count:int;flags:int;file_type:str
+    uid:int;gid:int;atime:int;mtime:int;ctime:int;crtime:int
+    @property
+    def dtime(self):return iso(self.deletion_time)
+    @property
+    def atime_iso(self):return iso(self.atime)
+    @property
+    def mtime_iso(self):return iso(self.mtime)
+    @property
+    def ctime_iso(self):return iso(self.ctime)
+    @property
+    def crtime_iso(self):return iso(self.crtime)
+def itype(mode):return {S_IFREG:"regular",S_IFDIR:"directory",S_IFLNK:"symlink"}.get(mode&S_IFMT,"other")
+def parse_inode(data,no,group,offset):
+    if len(data)<128:raise ValueError("inode truncated")
+    mode=u16(data,0)
+    return Inode(no,group,offset,mode,u32(data,4)|(u32(data,108)<<32 if len(data)>=112 else 0),
+                 u32(data,20),u16(data,26),u32(data,32),itype(mode),u16(data,2),u16(data,24),
+                 u32(data,8),u32(data,16),u32(data,12),u32(data,144) if len(data)>=148 else 0)
+@dataclass(frozen=True)
+class Extent:
+    logical:int;length:int;physical:int;unwritten:bool=False
+def extents(fh,sb,inode_data,fs_offset):
+    root=inode_data[40:100]
+    if len(root)<60:return []
+    magic,entries,max_entries,depth=struct.unpack_from("<HHHH",root,0)
+    if magic!=EXTENT_MAGIC or entries>max_entries or depth>5:return []
+    out=[]
+    def walk(node):
+        magic,e,m,d=struct.unpack_from("<HHHH",node,0)
+        if magic!=EXTENT_MAGIC or e>m:return
+        for i in range(e):
+            o=12+i*12
+            if o+12>len(node):break
+            if d==0:
+                logical=u32(node,o);raw=u16(node,o+4);physical=u32(node,o+8)|(u16(node,o+6)<<32)
+                out.append(Extent(logical,raw&0x7fff,physical,bool(raw&0x8000)))
+            else:
+                child=u32(node,o+4)|(u16(node,o+8)<<32)
+                if child:
+                    fh.seek(fs_offset+child*sb.block_size);b=fh.read(sb.block_size)
+                    if len(b)==sb.block_size:walk(b)
+    walk(root);return sorted(out,key=lambda e:e.logical)
+def legacy_blocks(fh,sb,inode_data,fs_offset):
+    for i in range(12):
+        b=u32(inode_data,40+i*4)
+        if b:yield b
+    ind=u32(inode_data,88)
+    if ind:
+        fh.seek(fs_offset+ind*sb.block_size);raw=fh.read(sb.block_size)
+        for o in range(0,len(raw)-3,4):
+            b=u32(raw,o)
+            if b:yield b
+</file>
+
+<file path="backend/app/forensics/hashing.py">
+from __future__ import annotations
+import hashlib
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from app.core.config import settings
+
+def sha256_file(path,chunk_size=None):
+    h=hashlib.sha256();size=Path(path).stat().st_size
+    with Path(path).open("rb",buffering=0) as f:
+        while True:
+            chunk=f.read(chunk_size or settings.chunk_size)
+            if not chunk:break
+            h.update(chunk)
+    return h.hexdigest()
+
+def hash_files(paths,workers):
+    paths=[str(Path(x)) for x in paths]
+    if not paths:return {}
+    def one(p):return p,sha256_file(p)
+    with ThreadPoolExecutor(max_workers=max(1,workers),thread_name_prefix="hash") as ex:
+        return dict(ex.map(one,paths))
+</file>
+
+<file path="backend/app/forensics/io.py">
+from __future__ import annotations
+import os,threading
+from pathlib import Path
+class ReadOnlyImage:
+    def __init__(self,path):
+        self.path=Path(path);self.local=threading.local();self.lock=threading.Lock()
+    def _fh(self):
+        fh=getattr(self.local,"fh",None)
+        if fh is None or fh.closed: fh=self.path.open("rb",buffering=0);self.local.fh=fh
+        return fh
+    def read_at(self,offset,size):
+        if size<=0:return b""
+        fh=self._fh()
+        if hasattr(os,"pread"):return os.pread(fh.fileno(),size,offset)
+        with self.lock:fh.seek(offset);return fh.read(size)
+    def size(self):return self.path.stat().st_size
+</file>
+
+<file path="backend/app/forensics/journal.py">
+from app.forensics.ext4_structs import (
+    JBD2_MAGIC,JBD2_DESCRIPTOR_BLOCK,JBD2_COMMIT_BLOCK,JBD2_SUPERBLOCK_V1,JBD2_SUPERBLOCK_V2,JBD2_REVOKE_BLOCK,
+    extents
+)
+
+def inspect(reader,sb,fs_offset,journal_inode,target_inodes,max_blocks=8192):
+    if journal_inode is None:
+        return {"status":"unavailable","blocks_scanned":0,"evidence":[],"candidate_hits":{}}
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    data=reader.read_at(journal_inode.offset,sb.inode_size)
+    exts=extents(A(),sb,data,fs_offset);scanned=0;ev=[];hits={}
+    labels={1:"descriptor",2:"commit",3:"superblock_v1",4:"superblock_v2",5:"revoke"}
+    for ex in exts:
+        for i in range(ex.length):
+            if scanned>=max_blocks:break
+            p=ex.physical+i;b=reader.read_at(fs_offset+p*sb.block_size,sb.block_size);scanned+=1
+            if len(b)!=sb.block_size:continue
+            if int.from_bytes(b[:4],"big")==JBD2_MAGIC and len(b)>=12:
+                typ=int.from_bytes(b[4:8],"big");seq=int.from_bytes(b[8:12],"big")
+                ev.append({"kind":labels.get(typ,f"type_{typ}"),"journal_block":p,"sequence":seq,
+                           "message":"JBD2 transaction block detected.","inode_hits":[]})
+    return {"status":"inspected","blocks_scanned":scanned,"evidence":ev,"candidate_hits":hits,
+            "message":f"Inspected {scanned:,} journal blocks."}
+</file>
+
+<file path="backend/app/forensics/partitions.py">
+from dataclasses import dataclass
+from pathlib import Path
+import struct
+
+@dataclass(frozen=True)
+class Partition:
+    number:int;start:int;length:int;scheme:str;type_code:str
+def u32(b,o):return struct.unpack_from("<I",b,o)[0]
+def u64(b,o):return struct.unpack_from("<Q",b,o)[0]
+def detect(path):
+    out=[]
+    with Path(path).open("rb",buffering=0) as f:
+        boot=f.read(512)
+        if len(boot)>=512 and boot[510:512]==b"\x55\xaa":
+            for i in range(4):
+                o=446+i*16;typ=boot[o+4];start=u32(boot,o+8);sectors=u32(boot,o+12)
+                if typ and sectors:out.append(Partition(i+1,start*512,sectors*512,"MBR",f"0x{typ:02x}"))
+        f.seek(512);hdr=f.read(512)
+        if hdr[:8]==b"EFI PART":
+            tl=u64(hdr,72);count=u32(hdr,80);size=u32(hdr,84)
+            if 0<count<=4096 and 128<=size<=4096:
+                f.seek(tl*512);raw=f.read(count*size)
+                for i in range(count):
+                    e=raw[i*size:(i+1)*size]
+                    if len(e)<size or e[:16]==b"\0"*16:continue
+                    first=u64(e,32);last=u64(e,40)
+                    if last>=first:out.append(Partition(i+1,first*512,(last-first+1)*512,"GPT",e[:16].hex()))
+    return out
+</file>
+
+<file path="backend/app/forensics/pytsk_adapter.py">
+from __future__ import annotations
+from pathlib import Path
+
+def cross_check_with_pytsk3(image_path: str|Path, fs_offset:int)->dict:
+    try:
+        import pytsk3
+    except ImportError:
+        return {"status":"unavailable","message":"pytsk3 is not installed."}
+    try:
+        img=pytsk3.Img_Info(str(image_path))
+        fs=pytsk3.FS_Info(img,offset=fs_offset)
+        root=fs.open_meta(2)
+        return {"status":"ok","message":"pytsk3 opened the same filesystem offset.",
+                "block_size":getattr(fs.info,"block_size",None),
+                "root_inode":getattr(root.info,"meta_addr",2)}
+    except Exception as exc:
+        return {"status":"error","message":str(exc)}
+</file>
+
+<file path="backend/app/forensics/pytsk_artifacts.py">
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from app.core.config import settings
+
+TARGET_BASENAMES = {
+    ".bash_history",
+    "activity.log",
+    "meeting-notes.txt",
+    "confidential-clients.txt",
+}
+TARGET_HINTS = ("orion", "transfer", "history", "activity", "meeting", "confidential", "zip")
+
+
+def _decode_name(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value or "")
+
+
+def _iso(value: Any) -> str | None:
+    try:
+        value = int(value or 0)
+        if not value:
+            return None
+        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _read_entry(entry, max_bytes: int) -> bytes:
+    meta = getattr(getattr(entry, "info", None), "meta", None)
+    if meta is None:
+        return b""
+    size = int(getattr(meta, "size", 0) or 0)
+    if size <= 0 or size > max_bytes:
+        return b""
+    try:
+        return bytes(entry.read_random(0, size))
+    except Exception:
+        return b""
+
+
+def _artifact_record(path: str, entry) -> dict[str, Any] | None:
+    info = getattr(entry, "info", None)
+    if not info:
+        return None
+    name_info = getattr(info, "name", None)
+    meta = getattr(info, "meta", None)
+    if not name_info or not meta:
+        return None
+
+    return {
+        "path": path,
+        "inode": int(getattr(meta, "addr", 0) or 0),
+        "size": int(getattr(meta, "size", 0) or 0),
+        "atime": _iso(getattr(meta, "atime", 0)),
+        "mtime": _iso(getattr(meta, "mtime", 0)),
+        "ctime": _iso(getattr(meta, "ctime", 0)),
+        "dtime": _iso(getattr(meta, "dtime", 0)),
+        "allocated": _meta_is_allocated(meta),
+        "meta_type": int(getattr(meta, "type", 0) or 0),
+    }
+
+
+def _meta_is_allocated(meta) -> bool:
+    try:
+        import pytsk3
+        unalloc = getattr(pytsk3, "TSK_FS_META_FLAG_UNALLOC", 0)
+        return not bool(int(getattr(meta, "flags", 0) or 0) & int(unalloc))
+    except Exception:
+        return True
+
+
+def walk_filesystem(fs, start_inode: int = 2, max_entries: int = 20000, max_depth: int = 20):
+    """Yield (path, entry) pairs using the same directory/as_directory pattern as pytsk3's tests."""
+    import pytsk3
+
+    try:
+        root = fs.open_dir(inode=start_inode)
+    except Exception as exc:
+        return [], f"Unable to open root inode {start_inode}: {exc}"
+
+    rows: list[tuple[str, Any]] = []
+    seen_dirs: set[int] = set()
+    dir_type = getattr(pytsk3, "TSK_FS_META_TYPE_DIR", None)
+
+    def recurse(directory, prefix: str, depth: int, active_dirs: set[int]):
+        if len(rows) >= max_entries or depth > max_depth:
+            return
+
+        try:
+            iterator = iter(directory)
+        except Exception:
+            return
+
+        for entry in iterator:
+            if len(rows) >= max_entries:
+                return
+
+            info = getattr(entry, "info", None)
+            if not info:
+                continue
+            name_info = getattr(info, "name", None)
+            meta = getattr(info, "meta", None)
+            if not name_info or not meta:
+                continue
+
+            raw_name = getattr(name_info, "name", b"")
+            name = _decode_name(raw_name)
+            if not name or name in {".", "..", "$OrphanFiles"}:
+                continue
+
+            path = f"{prefix}/{name}" if prefix else f"/{name}"
+            rows.append((path, entry))
+
+            if dir_type is not None and getattr(meta, "type", None) == dir_type:
+                inode = int(getattr(meta, "addr", 0) or 0)
+                if inode and inode not in active_dirs and inode not in seen_dirs:
+                    seen_dirs.add(inode)
+                    try:
+                        subdir = entry.as_directory()
+                    except Exception:
+                        continue
+                    recurse(subdir, path, depth + 1, active_dirs | {inode})
+
+    recurse(root, "", 0, {start_inode})
+    return rows, None
+
+
+def _interesting(path: str) -> bool:
+    lower = path.lower()
+    base = lower.rsplit("/", 1)[-1]
+    return base in TARGET_BASENAMES or any(h in lower for h in TARGET_HINTS)
+
+
+def _parse_kv(text: str) -> dict[str, str]:
+    pairs = {}
+    for match in re.finditer(r'(\w+)=((?:"[^"]*")|(?:[^\s]+))', text):
+        pairs[match.group(1)] = match.group(2).strip('"')
+    return pairs
+
+
+def _normalize_activity_event(event: str, details: str) -> str:
+    if event == "usb_device":
+        kv = _parse_kv(details)
+        action = kv.get("action", "").lower()
+        if action == "connected":
+            return "usb_connected"
+        if action == "disconnected":
+            return "usb_disconnected"
+    if event == "archive_created":
+        return "archive_created"
+    if event == "file_open":
+        return "file_open"
+    if event == "delete":
+        return "delete"
+    if event == "shell" and "history -c" in details:
+        return "history_clear"
+    return event
+
+
+def parse_activity_log(path: str, text: str) -> list[dict[str, Any]]:
+    events = []
+    for line_no, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(\d{4}-\d\d-\d\dT[^\s]+)\s+(\S+)\s*(.*)$", line)
+        if not match:
+            continue
+        timestamp, raw_event, details = match.groups()
+        events.append({
+            "timestamp": timestamp,
+            "local_time": timestamp,
+            "source": path,
+            "event": _normalize_activity_event(raw_event, details),
+            "raw_event": raw_event,
+            "details": details,
+            "line_number": line_no,
+            "classification": "fact",
+        })
+    return events
+
+
+def parse_bash_history(path: str, text: str) -> list[dict[str, Any]]:
+    events = []
+    for index, line in enumerate(text.splitlines(), 1):
+        command = line.strip()
+        if not command:
+            continue
+        command_event = "shell_command"
+        if command == "history -c":
+            command_event = "history_clear_command"
+        elif command.startswith("cp "):
+            command_event = "copy_command"
+        elif command.startswith("zip "):
+            command_event = "archive_command"
+        elif command.startswith("rm "):
+            command_event = "delete_command"
+        events.append({
+            "timestamp": "",
+            "local_time": None,
+            "source": path,
+            "event": command_event,
+            "details": command,
+            "sequence": index,
+            "classification": "fact",
+        })
+    return events
+
+
+def extract_artifacts(image_path: str | Path, fs_offset: int) -> dict[str, Any]:
+    try:
+        import pytsk3
+        image = pytsk3.Img_Info(str(image_path))
+        fs = pytsk3.FS_Info(image, offset=fs_offset)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "files": [], "timeline": []}
+
+    rows, error = walk_filesystem(fs)
+    artifacts = []
+    timeline = []
+    errors = []
+
+    for path, entry in rows:
+        if not _interesting(path):
+            continue
+        record = _artifact_record(path, entry)
+        if not record:
+            continue
+        if record["size"] > settings.text_artifact_max_bytes:
+            continue
+        data = _read_entry(entry, settings.text_artifact_max_bytes)
+        if record["size"] and not data:
+            errors.append(f"Could not read {path}")
+            continue
+
+        digest = hashlib.sha256(data).hexdigest()
+        text = data.decode("utf-8", "replace")
+        record.update({
+            "type": "live_artifact",
+            "content": text,
+            "content_sha256": digest,
+        })
+        artifacts.append(record)
+
+        base = path.rsplit("/", 1)[-1].lower()
+        if base == "activity.log":
+            timeline.extend(parse_activity_log(path, text))
+        elif base == ".bash_history":
+            timeline.extend(parse_bash_history(path, text))
+
+    return {
+        "status": "ok" if not error else "partial",
+        "message": error or f"Walked {len(rows):,} filesystem entries; extracted {len(artifacts):,} targeted artifacts.",
+        "files": artifacts,
+        "timeline": timeline,
+        "filesystem_entry_count": len(rows),
+        "errors": errors,
+    }
+</file>
+
+<file path="backend/app/forensics/recovery.py">
+from __future__ import annotations
+import hashlib
+from pathlib import Path
+from app.core.config import settings
+from app.forensics.ext4_structs import EXT4_EXTENTS_FL,extents,legacy_blocks,parse_inode
+from app.forensics.io import ReadOnlyImage
+from app.forensics.signatures import identify
+
+def adapter(reader):
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    return A()
+
+def recover(image_path,fs_offset,sb,inode,out):
+    expected=int(inode.size)
+    if expected>settings.max_recovery_bytes:raise ValueError("Recovery exceeds configured size limit.")
+    reader=ReadOnlyImage(image_path);data=reader.read_at(inode.offset,sb.inode_size)
+    parsed=parse_inode(data,inode.inode,inode.group,inode.offset)
+    out=Path(out);out.parent.mkdir(parents=True,exist_ok=True)
+    written=0;h=hashlib.sha256();sample=bytearray();unwritten=False
+    def write(f,b):
+        nonlocal written
+        b=b[:expected-written]
+        if not b:return
+        f.write(b);h.update(b);sample.extend(b[:max(0,4096-len(sample))]);written+=len(b)
+    with out.open("wb",buffering=0) as f:
+        if parsed.flags & EXT4_EXTENTS_FL:
+            for ex in extents(adapter(reader),sb,data,fs_offset):
+                if ex.unwritten:unwritten=True;continue
+                for i in range(ex.length):
+                    if written>=expected:break
+                    b=reader.read_at(fs_offset+(ex.physical+i)*sb.block_size,min(sb.block_size,expected-written))
+                    if not b:break
+                    write(f,b)
+        else:
+            for block in legacy_blocks(adapter(reader),sb,data,fs_offset):
+                if written>=expected:break
+                b=reader.read_at(fs_offset+block*sb.block_size,min(sb.block_size,expected-written))
+                if not b:break
+                write(f,b)
+    sig=identify(bytes(sample));complete=(written==expected and not unwritten)
+    status="complete" if complete else ("partial" if written else "not_recoverable")
+    return {"path":str(out),"bytes_written":written,"expected_bytes":expected,"sha256":h.hexdigest(),
+            "signature":{"name":sig.label,"extension":sig.extension,"mime":sig.mime,"confidence":sig.confidence},
+            "recovery_status":status,"size_verified":complete,
+            "validation_reason":"All logical bytes were recovered from retained data extents." if complete
+            else ("Some bytes were recovered, but the complete logical file was not reconstructed." if written
+                  else "No readable data blocks were recovered.")}
+</file>
+
+<file path="backend/app/forensics/signatures.py">
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FileSignature:
+    label:str
+    extension:str
+    mime:str
+    confidence:str
+
+MAGICS=[
+ (b"%PDF-",FileSignature("PDF document",".pdf","application/pdf","high")),
+ (b"\x89PNG\r\n\x1a\n",FileSignature("PNG image",".png","image/png","high")),
+ (b"\xff\xd8\xff",FileSignature("JPEG image",".jpg","image/jpeg","high")),
+ (b"GIF87a",FileSignature("GIF image",".gif","image/gif","high")),
+ (b"GIF89a",FileSignature("GIF image",".gif","image/gif","high")),
+ (b"PK\x03\x04",FileSignature("ZIP archive / OOXML container",".zip","application/zip","high")),
+ (b"\x7fELF",FileSignature("ELF executable",".elf","application/x-elf","high")),
+ (b"\x1f\x8b\x08",FileSignature("GZIP archive",".gz","application/gzip","high")),
+ (b"SQLite format 3\x00",FileSignature("SQLite database",".sqlite","application/vnd.sqlite3","high")),
+ (b"Rar!\x1a\x07\x00",FileSignature("RAR archive",".rar","application/vnd.rar","high")),
+ (b"7z\xbc\xaf'\x1c",FileSignature("7-Zip archive",".7z","application/x-7z-compressed","high")),
+]
+
+def identify(data):
+    if not data:return FileSignature("Empty file","","application/octet-stream","high")
+    for magic,sig in MAGICS:
+        if data.startswith(magic):return sig
+    sample=data[:4096]
+    printable=sum(1 for b in sample if b in (9,10,13) or 32<=b<=126)
+    if printable/max(1,len(sample))>.92:return FileSignature("Likely text",".txt","text/plain","medium")
+    return FileSignature("Binary data",".bin","application/octet-stream","low")
+</file>
+
+<file path="backend/app/services/__init__.py">
+
+</file>
+
+<file path="backend/app/services/artifact_service.py">
+from __future__ import annotations
+import json
+import uuid
+from pathlib import Path
+from app.db.repository import get_scan, clear_artifacts, insert_artifact, insert_timeline
+from app.forensics.pytsk_artifacts import extract_artifacts
+
+def refresh_artifacts(scan_id: str, force: bool = True) -> dict:
+    scan=get_scan(scan_id)
+    if not scan: raise ValueError("Scan not found.")
+    if force: clear_artifacts(scan_id)
+    payload=extract_artifacts(Path(scan["evidence_path"]), int(json.loads(_analysis_details(scan, "{}"))["ext4"]["filesystem_offset"]))
+    for a in payload.get("files",[]):
+        insert_artifact({"id":str(uuid.uuid4()),"scan_id":scan_id,**a,"metadata":{"allocated":a.get("allocated"),"meta_type":a.get("meta_type")}})
+    for e in payload.get("timeline",[]):
+        insert_timeline({"id":str(uuid.uuid4()),"scan_id":scan_id,**e})
+    return payload
+
+def _analysis_details(scan, default):
+    # Import locally so artifact refresh has one narrow dependency on integrity records.
+    from app.db.repository import list_integrity
+    for row in list_integrity(scan["case_id"]):
+        if row["scan_id"]==scan["id"] and row["event_type"]=="analysis_completed":
+            return row["details"]
+    return default
+
+def ensure_artifacts(scan_id: str) -> dict:
+    from app.db.repository import list_artifacts
+    if list_artifacts(scan_id):
+        return {"status":"ok","message":"Artifacts already populated.","refreshed":False}
+    payload=refresh_artifacts(scan_id,force=True)
+    return {**payload,"refreshed":True}
+</file>
+
+<file path="backend/app/services/docx_report.py">
+from __future__ import annotations
+import json
+from pathlib import Path
+from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
+from docx.shared import Inches,Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from app.core.config import settings
+from app.services.report_builder import build_report
+
+def xml_safe(value) -> str:
+    """Return XML 1.0-compatible text for python-docx/OpenXML."""
+    text = str(value if value is not None else "")
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if code in (0x09, 0x0A, 0x0D) or 0x20 <= code <= 0xD7FF or 0xE000 <= code <= 0xFFFD or 0x10000 <= code <= 0x10FFFF:
+            out.append(ch)
+        elif code <= 0x1F:
+            out.append(f"[0x{code:02X}]")
+        elif 0xD800 <= code <= 0xDFFF:
+            out.append("[invalid-surrogate]")
+        else:
+            out.append("[invalid-xml-char]")
+    return "".join(out)
+
+def shade(cell,fill):
+    tcPr=cell._tc.get_or_add_tcPr();shd=OxmlElement("w:shd");shd.set(qn("w:fill"),fill);tcPr.append(shd)
+
+def repeat_header(row):
+    trPr=row._tr.get_or_add_trPr();el=OxmlElement("w:tblHeader");el.set(qn("w:val"),"true");trPr.append(el)
+
+def cell_text(cell,text,bold=False,size=8.5):
+    cell.text="";p=cell.paragraphs[0];r=p.add_run(xml_safe(text));r.bold=bold;r.font.size=Pt(size);cell.vertical_alignment=WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+def add_table(doc,headers,rows,sizes=None):
+    t=doc.add_table(rows=1,cols=len(headers));t.style="Table Grid";t.alignment=WD_TABLE_ALIGNMENT.CENTER
+    repeat_header(t.rows[0])
+    for i,h in enumerate(headers):cell_text(t.rows[0].cells[i],h,True);shade(t.rows[0].cells[i],"DCE6F1")
+    for row in rows:
+        cells=t.add_row().cells
+        for i,v in enumerate(row):cell_text(cells[i],v)
+    if sizes:
+        for row in t.rows:
+            for i,w in enumerate(sizes):row.cells[i].width=Inches(w)
+    return t
+
+def bullet(doc,text):doc.add_paragraph(xml_safe(text),style="List Bullet")
+
+def generate_docx(scan_id,output_path=None):
+    report=build_report(scan_id)
+    out=Path(output_path or settings.report_dir/f"ext4-report-{scan_id[:8]}.docx");out.parent.mkdir(parents=True,exist_ok=True)
+    doc=Document();sec=doc.sections[0];sec.orientation=WD_ORIENT.LANDSCAPE;sec.page_width,sec.page_height=sec.page_height,sec.page_width
+    sec.top_margin=Inches(.55);sec.bottom_margin=Inches(.55);sec.left_margin=Inches(.6);sec.right_margin=Inches(.6)
+    doc.styles["Normal"].font.name="Aptos";doc.styles["Normal"].font.size=Pt(9)
+    doc.styles["Title"].font.name="Aptos Display";doc.styles["Title"].font.size=Pt(24)
+    doc.styles["Heading 1"].font.name="Aptos Display";doc.styles["Heading 1"].font.size=Pt(16)
+    doc.styles["Heading 2"].font.name="Aptos";doc.styles["Heading 2"].font.size=Pt(11)
+
+    p=doc.add_paragraph(style="Title");p.alignment=WD_ALIGN_PARAGRAPH.CENTER;p.add_run("EXT4 Deleted File Recovery Report")
+    p=doc.add_paragraph();p.alignment=WD_ALIGN_PARAGRAPH.CENTER;r=p.add_run(xml_safe("Lab #02 · Project ORION · Machine-generated forensic work product"));r.bold=True;r.font.size=Pt(11)
+
+    doc.add_heading("1. Mandate",1);doc.add_paragraph("Scope: preserve and analyze the supplied RAW image, identify EXT4, recover deleted files, reconstruct a defensible chronology from artifacts, and clearly separate facts from hypotheses.")
+    doc.add_heading("2. Integrity",1)
+    add_table(doc,["Item","Value"],[("Evidence path",report["evidence"]["path"]),("Size",f'{report["evidence"]["size_bytes"]:,} bytes'),("Pre-scan SHA-256",report["evidence"]["pre_scan_sha256"]),("Post-scan SHA-256",report["evidence"]["post_scan_sha256"] or "Pending"),("Integrity result","MATCH" if report["evidence"]["integrity_match"] else "NOT VERIFIED / CHANGED")],[1.8,8.4])
+    doc.add_heading("3. Method",1);doc.add_paragraph("The workbench uses streamed read-only image access, bounded I/O/hash workers, EXT4 superblock/group/inode analysis, directory metadata reconstruction, targeted JBD2 inspection, pytsk3 cross-checking, metadata-based recovery, file-signature detection, recovered-file SHA-256, and a local chained integrity ledger.")
+    p=doc.add_paragraph();p.add_run(xml_safe("Resource policy: ")).bold=True;p.add_run(xml_safe(json.dumps(report["tooling"]["resource_policy"])))
+
+    doc.add_heading("4. Filesystem findings",1)
+    fs=report.get("filesystem_metadata") or {};add_table(doc,["Filesystem","Volume label","UUID","Block size","Inodes","Blocks"],[(report["filesystem"] or "Not extracted",report["volume_label"] or "Not extracted",fs.get("uuid","—"),fs.get("block_size","—"),fs.get("inodes_count","—"),fs.get("blocks_count","—"))],[1.5,1.7,3.0,1.2,1.0,1.0])
+
+    doc.add_heading("5. Deleted-file findings",1)
+    add_table(doc,["Inode","Name","Original path","Size","Deleted UTC","Recovery","Validation","Source"],[(f["inode"],f["original_name"] or "—",f["original_path"] or "—",f["size_bytes"],f["deletion_time"] or "—",f["recovery_status"],f["validation_status"] or "—",f["source"]) for f in report["deleted_files"]],[.65,1.8,3.2,.75,1.4,1.0,1.0,1.2])
+    doc.add_heading("5.1 Recovered-file hashes",2)
+    add_table(doc,["Inode","Recovered file","Bytes","SHA-256"],[(f.get("inode","—"),f.get("recovered_path") or "—",f.get("recovered_size_bytes") or "—",f.get("recovered_sha256") or "—") for f in report["deleted_files"]],[.65,4.5,1.0,4.8])
+
+    d=report["lab02_deliverables"]
+    doc.add_heading("6. Required Lab #02 deliverables",1)
+    doc.add_heading("6.1 Image SHA-256",2);doc.add_paragraph(d["1_image_sha256"])
+    doc.add_heading("6.2 Filesystem and volume label",2);doc.add_paragraph(f'Filesystem: {d["2_filesystem_and_volume_label"]["filesystem"] or "Not extracted"}; Volume label: {d["2_filesystem_and_volume_label"]["volume_label"] or "Not extracted"}.')
+    doc.add_heading("6.3 Deleted files and inodes",2)
+    for f in d["3_deleted_files_and_inodes"]:bullet(doc,f'Inode {f.get("inode","—")}: {f.get("original_name") or "unnamed"} · {f.get("original_path") or "path not reconstructed"} · {f.get("size_bytes","—")} bytes · {f.get("recovery_status","—")}.')
+    doc.add_heading("6.4 USB connection",2);doc.add_paragraph(xml_safe(json.dumps(d["4_usb_connected"],indent=2)) if d["4_usb_connected"] else xml_safe("No USB connection event was extracted from the image."))
+    doc.add_heading("6.5 Archive creation",2);doc.add_paragraph(xml_safe(json.dumps(d["5_archive_created"],indent=2)) if d["5_archive_created"] else xml_safe("No archive creation event was extracted from the image."))
+    doc.add_heading(xml_safe("6.6 Confidential document recovery"),2)
+    if d["6_confidential_document_recovered"]:
+        for f in d["6_confidential_document_recovered"]["candidates"]:bullet(doc,f'Inode {f.get("inode","—")}: {f.get("original_name") or "—"} · {f.get("original_path") or "—"} · {f.get("size_bytes","—")} bytes · SHA-256 {f.get("recovered_sha256") or "—"}.')
+    else:doc.add_paragraph("No PDF recovery candidate was identified.")
+    doc.add_heading("6.7 Metadata recovery vs carving",2);doc.add_paragraph("Metadata recovery: "+d["7_icat_vs_carving"]["metadata_recovery"]);doc.add_paragraph("Carving: "+d["7_icat_vs_carving"]["carving"])
+    doc.add_heading("6.8 Facts vs hypotheses",2)
+    doc.add_paragraph("Facts",style="Heading 2")
+    for x in d["8_facts_and_hypotheses"]["facts"]:bullet(doc,x)
+    doc.add_paragraph("Hypotheses / interpretation",style="Heading 2")
+    for x in d["8_facts_and_hypotheses"]["hypotheses"]:bullet(doc,x)
+
+    doc.add_heading("7. Timeline",1)
+    rows=[]
+    for e in report["timeline"]:
+        ts=e.get("timestamp") or (f'order #{e.get("sequence")}' if e.get("sequence") else "—")
+        rows.append((ts,e.get("source") or "—",e.get("event") or "—",e.get("details") or "—"))
+    add_table(doc,["Timestamp / order","Source","Event","Details"],rows,[1.7,2.6,1.7,5.4])
+
+    doc.add_heading("8. Live artifact inventory",1)
+    add_table(doc,["Path","Inode","Size","Mtime UTC","SHA-256"],[(a.get("path","—"),a.get("inode","—"),a.get("size",a.get("size_bytes",0)),a.get("mtime") or "—",a.get("content_sha256") or "—") for a in report.get("live_artifacts",[])],[4.0,.7,1.0,1.6,4.2])
+    for a in report.get("live_artifacts",[]):
+        if a.get("content"):
+            doc.add_heading(a["path"],2);p=doc.add_paragraph();r=p.add_run(xml_safe((a.get("content") or "")[:4000]));r.font.name="Consolas";r.font.size=Pt(7.7)
+
+    doc.add_heading("9. Recovered content and archive analysis",1)
+    for x in report.get("recovered_content",[]):
+        doc.add_heading(f'Inode {x["inode"]} · recovered content strings',2);p=doc.add_paragraph();r=p.add_run(xml_safe(x.get("strings","")));r.font.name="Consolas";r.font.size=Pt(7.7)
+    archive=report.get("recovered_archive_analysis")
+    if archive:
+        doc.add_heading("Recovered ZIP members",2)
+        add_table(doc,["Member","Size","Compressed","SHA-256"],[(m.get("name"),m.get("size_bytes"),m.get("compressed_size_bytes"),m.get("sha256","—")) for m in archive.get("members",[])],[5.0,1.2,1.4,4.0])
+
+    doc.add_heading("10. Integrity ledger",1);doc.add_paragraph(report["integrity_ledger"]["message"])
+    for e in report.get("integrity_events",[]):doc.add_paragraph(f'{e["created_at"]} · {e["event_type"]} · {e.get("algorithm") or ""} · {e.get("value") or ""}')
+    doc.add_heading("11. Limitations",1)
+    for x in report.get("limitations",[]):bullet(doc,x)
+    doc.add_heading("12. Conclusion",1)
+    doc.add_paragraph("The image and its recoverable EXT4 artefacts establish the filesystem structure, deleted files, recovered content, and recorded timeline events shown above. Interpretive statements are kept separate: a USB connection, staged archive, deleted files or shell-history clearing may support an exfiltration hypothesis, but these artefacts alone do not prove successful copying to the USB device or external transmission.")
+
+    foot=sec.footer.paragraphs[0];foot.alignment=WD_ALIGN_PARAGRAPH.CENTER;foot.add_run(xml_safe("EXT4 Forensics Workbench v0.4.3 · Local forensic work product"))
+    doc.save(out)
+    return str(out)
+</file>
+
+<file path="backend/app/services/integrity_ledger.py">
+from __future__ import annotations
+import hashlib,json
+from pathlib import Path
+from threading import Lock
+from app.core.config import settings
+_lock=Lock()
+def _canon(x):return json.dumps(x,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
+def append_event(event):
+    with _lock:
+        prev=""
+        p=Path(settings.integrity_ledger)
+        if p.exists():
+            with p.open("r",encoding="utf-8",errors="replace") as f:
+                for line in f:
+                    if line.strip():
+                        try:prev=json.loads(line).get("entry_hash",prev)
+                        except json.JSONDecodeError:pass
+        row=dict(event);row["previous_hash"]=prev
+        row["entry_hash"]=hashlib.sha256(_canon(row)).hexdigest()
+        with p.open("a",encoding="utf-8",newline="\n") as f:f.write(json.dumps(row,sort_keys=True)+"\n")
+        return row
+def verify_chain():
+    p=Path(settings.integrity_ledger)
+    if not p.exists():return True,"Ledger is empty.",0
+    prev="";count=0
+    with _lock,p.open("r",encoding="utf-8",errors="replace") as f:
+        for n,line in enumerate(f,1):
+            if not line.strip():continue
+            try:r=json.loads(line)
+            except json.JSONDecodeError:return False,f"Invalid JSON at line {n}.",count
+            if r.get("previous_hash","")!=prev:return False,f"Broken chain at line {n}.",count
+            claim=r.get("entry_hash");check=dict(r);check.pop("entry_hash",None)
+            if hashlib.sha256(_canon(check)).hexdigest()!=claim:return False,f"Hash mismatch at line {n}.",count
+            prev=claim;count+=1
+    return True,f"Ledger verified ({count} events).",count
+</file>
+
+<file path="backend/app/services/report_builder.py">
+from __future__ import annotations
+import json
+import re
+import zipfile
+import hashlib
+from pathlib import Path
+from app.db.repository import get_scan,list_findings,list_artifacts,list_timeline,list_integrity
+from app.services.integrity_ledger import verify_chain
+from app.services.artifact_service import ensure_artifacts
+
+def _json_row(row):
+    d=dict(row)
+    for key in ("metadata_json","journal_evidence_json","original_name_candidates_json"):
+        try:d[key]=json.loads(d.get(key) or ("{}" if key=="metadata_json" else "[]"))
+        except Exception:pass
+    return d
+
+def _strings(path: Path, limit=8192):
+    try:data=path.read_bytes()[:limit]
+    except Exception:return ""
+    text=data.decode("latin-1","ignore")
+    runs=re.findall(r"[\x20-\x7e]{6,}",text)
+    return "\n".join(runs[:40])
+
+def _analyse_zip(path: Path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            members=[]
+            for info in z.infolist()[:100]:
+                item={"name":info.filename,"size_bytes":info.file_size,"compressed_size_bytes":info.compress_size}
+                if info.file_size<=25*1024*1024 and not info.is_dir():
+                    data=z.read(info)
+                    item["sha256"]=hashlib.sha256(data).hexdigest()
+                members.append(item)
+            return {"status":"ok","members":members}
+    except Exception as exc:return {"status":"error","message":str(exc),"members":[]}
+
+def build_report(scan_id):
+    scan=get_scan(scan_id)
+    if not scan:raise ValueError("Scan not found.")
+    ensure_artifacts(scan_id)
+    findings=[_json_row(r) for r in list_findings(scan_id)]
+    artifacts=[]
+    for r in list_artifacts(scan_id):
+        a=dict(r)
+        if "size" not in a:
+            a["size"]=a.get("size_bytes", 0)
+        if "meta_type" not in a:
+            a["meta_type"]=a.get("type")
+        artifacts.append(a)
+    timeline=[dict(r) for r in list_timeline(scan_id)]
+    integrity=[dict(r) for r in list_integrity(scan["case_id"])]
+    ledger_ok,msg,count=verify_chain()
+
+    ext4=None
+    for e in integrity:
+        if e["event_type"]=="analysis_completed":
+            try: ext4=json.loads(e["details"]).get("ext4")
+            except Exception: pass
+            break
+
+    deleted=[]
+    for f in findings:
+        duplicate_of=None
+        for other in findings:
+            if other["id"]!=f["id"] and f.get("recovered_sha256") and f.get("recovered_sha256")==other.get("recovered_sha256"):
+                duplicate_of=other.get("inode");break
+        deleted.append({
+            "inode":f["inode"],"original_name":f.get("original_name") or f.get("name"),
+            "original_path":f.get("original_path"),"size_bytes":f.get("size_bytes"),
+            "deletion_time":f.get("deletion_time"),"file_type":f.get("file_type"),
+            "file_signature":f.get("file_signature"),"recovery_status":f.get("recovery_status"),
+            "recovered_size_bytes":f.get("recovered_size_bytes"),"recovered_sha256":f.get("recovered_sha256"),
+            "validation_status":f.get("validation_status"),"validation_reason":f.get("validation_reason"),
+            "source":f.get("source"),"confidence":f.get("confidence"),
+            "journal_evidence":f.get("journal_evidence_json") or [],
+            "name_candidates":f.get("original_name_candidates_json") or [],
+            "duplicate_of_inode":duplicate_of,
+            "recovered_path":f.get("recovered_path"),
+        })
+
+    by_name={a["path"].lower():a for a in artifacts}
+    def find_artifact(basename):
+        for path,a in by_name.items():
+            if path.rsplit("/",1)[-1]==basename.lower():return a
+        return None
+
+    activity=find_artifact("activity.log")
+    bash=find_artifact(".bash_history")
+    meeting=find_artifact("meeting-notes.txt")
+    clients=find_artifact("confidential-clients.txt")
+
+    activity_events=[e for e in timeline if (e.get("source") or "").lower().endswith("activity.log")]
+    bash_events=[e for e in timeline if (e.get("source") or "").lower().endswith(".bash_history")]
+
+    def first_event(kind):
+        return next((e for e in activity_events if e.get("event")==kind),None)
+
+    usb_conn=first_event("usb_connected")
+    usb_disc=first_event("usb_disconnected")
+    archive_event=first_event("archive_created")
+    history_clear=first_event("history_clear")
+
+    archive_analysis=None
+    for f in deleted:
+        if f["file_signature"] and "ZIP" in f["file_signature"].upper() and f.get("recovered_path"):
+            archive_analysis=_analyse_zip(Path(f["recovered_path"]))
+            break
+
+    recovered_content=[]
+    for f in deleted:
+        if f.get("recovered_path") and f.get("recovery_status") in {"complete","partial"}:
+            p=Path(f["recovered_path"]);strings=_strings(p)
+            if strings: recovered_content.append({"inode":f["inode"],"path":str(p),"strings":strings[:5000]})
+
+    facts=[]
+    if ext4:
+        facts.append(f'Filesystem: {ext4.get("filesystem")}; volume label: {ext4.get("volume_label") or "not available"}.')
+    facts.append(f'{len(deleted)} deleted inode candidate(s) identified.')
+    for e in activity_events:
+        facts.append(f'{e["timestamp"]} — {e["event"]}: {e.get("details","")}')
+    for f in deleted:
+        if f.get("recovery_status")=="complete":
+            facts.append(f'Inode {f["inode"]} was recovered completely with a size match ({f["size_bytes"]} bytes).')
+    if bash and bash.get("content"):
+        facts.append('On-disk .bash_history was recovered as a live artifact and its command sequence was preserved.')
+    if meeting and "transfer" in (meeting.get("content") or "").lower():
+        facts.append('meeting-notes.txt contains a reference to the TRANSFER USB label.')
+    if clients and "orion" in (clients.get("content") or "").lower():
+        facts.append('confidential-clients.txt references Project ORION.')
+
+    hypotheses=[]
+    if usb_conn and archive_event:
+        hypotheses.append('The short interval between USB connection and archive creation is consistent with a staged transfer workflow, but it does not prove that the archive was copied to the USB device.')
+    hypotheses.append('A recovered archive, USB connection event and deletion sequence may support an exfiltration hypothesis; the image does not by itself prove successful external transmission.')
+
+    limitations=[
+        'A recovered file is validated by its logical size, readable data and recovered-file SHA-256. An external known-good hash is needed for independent identity verification.',
+        'Filename/path reconstruction is based on surviving filesystem metadata; journal extraction is supplemental and is not a full JBD2 replay engine.',
+        'The activity log and shell history can establish recorded events/commands, but they do not by themselves prove that a file was successfully written to a removable device.',
+        'Timeline items derived from shell history are sequence evidence when no timestamp is present and should not be assigned an invented clock time.'
+    ]
+
+    return {
+        "report_version":"0.4",
+        "case":{"id":scan["case_id"],"name":scan["case_name"]},
+        "evidence":{
+            "path":scan["evidence_path"],"size_bytes":scan["size_bytes"],
+            "sha256":scan["pre_scan_sha256"],"pre_scan_sha256":scan["pre_scan_sha256"],
+            "post_scan_sha256":scan["post_scan_sha256"],
+            "integrity_match":bool(scan["post_scan_sha256"] and scan["post_scan_sha256"]==scan["pre_scan_sha256"])
+        },
+        "filesystem":ext4.get("filesystem") if ext4 else None,
+        "volume_label":ext4.get("volume_label") if ext4 else None,
+        "filesystem_metadata":ext4 or {},
+        "deleted_files":deleted,
+        "timeline":timeline,
+        "live_artifacts":artifacts,
+        "recovered_content":recovered_content,
+        "recovered_archive_analysis":archive_analysis,
+        "lab02_deliverables":{
+            "1_image_sha256":scan["pre_scan_sha256"],
+            "2_filesystem_and_volume_label":{"filesystem":ext4.get("filesystem") if ext4 else None,"volume_label":ext4.get("volume_label") if ext4 else None},
+            "3_deleted_files_and_inodes":deleted,
+            "4_usb_connected":usb_conn,
+            "5_archive_created":archive_event,
+            "6_confidential_document_recovered":{
+                "description":"Recovered Project ORION PDF",
+                "candidates":[f for f in deleted if f.get("file_signature") and "PDF" in f["file_signature"].upper()]
+            } if any(f.get("file_signature") and "PDF" in f["file_signature"].upper() for f in deleted) else None,
+            "7_icat_vs_carving":{
+                "metadata_recovery":"Uses the filesystem entry and inode/data-block context. It can retain inode, original name/path and logical file context when metadata survives.",
+                "carving":"Searches raw blocks for file signatures. It can recover content without a filesystem entry, but original name/path context is usually unavailable and fragmentation can cause incomplete results."
+            },
+            "8_facts_and_hypotheses":{"facts":facts,"hypotheses":hypotheses}
+        },
+        "artefact_summary":{
+            "activity_log":activity,
+            "bash_history":bash,
+            "meeting_notes":meeting,
+            "confidential_clients":clients,
+            "history_clear_event":history_clear,
+        },
+        "integrity_events":integrity,
+        "integrity_ledger":{"verified":ledger_ok,"message":msg,"events":count},
+        "limitations":limitations,
+        "tooling":{
+            "application":"EXT4 Deleted File Recovery Workbench 0.4",
+            "backend":"Python/FastAPI","filesystem_cross_check":"pytsk3",
+            "integrity":"SHA-256 + chained local JSONL ledger",
+            "resource_policy":{"io_workers":scan["io_workers"],"hash_workers":scan["hash_workers"],"policy":scan["resource_policy"]}
+        }
+    }
+</file>
+
+<file path="backend/app/services/scanner.py">
+from __future__ import annotations
+import json,uuid,re
+from concurrent.futures import ThreadPoolExecutor,as_completed
+from pathlib import Path
+from app.core.config import settings
+from app.db.repository import *
+from app.forensics.ext4_scanner import scan
+from app.forensics.hashing import sha256_file,hash_files
+from app.forensics.io import ReadOnlyImage
+from app.forensics.ext4_structs import group_inode_table,parse_inode,read_superblock
+from app.forensics.directory_entries import build_index
+from app.forensics.journal import inspect
+from app.forensics.pytsk_artifacts import extract_artifacts
+from app.forensics.recovery import recover
+from app.services.integrity_ledger import append_event
+
+pool=ThreadPoolExecutor(max_workers=settings.max_concurrent_scans,thread_name_prefix="scan-job")
+
+def submit_scan(i,case_id,evidence_id):pool.submit(run_scan,i,case_id,evidence_id)
+def _progress(i,p,stage,msg):update_scan(i,progress=p,stage=stage,message=msg)
+
+def ledger(case_id,evidence_id,scan_id,event_type,algorithm,value,details):
+    e={"case_id":case_id,"evidence_id":evidence_id,"scan_id":scan_id,
+       "event_type":event_type,"algorithm":algorithm,"value":value,"details":details}
+    insert_integrity(e);append_event({**e,"created_at":now_iso()})
+
+def _adapter(reader):
+    class A:
+        def __init__(self):self.off=0
+        def seek(self,o):self.off=o
+        def read(self,n):return reader.read_at(self.off,n)
+    return A()
+
+def journal_inode(reader,sb,fs_offset):
+    if not sb.journal_inum:return None
+    ino=sb.journal_inum;g=(ino-1)//sb.inodes_per_group;i=(ino-1)%sb.inodes_per_group
+    table=group_inode_table(_adapter(reader),sb,fs_offset,g);off=table+i*sb.inode_size
+    raw=reader.read_at(off,sb.inode_size)
+    return parse_inode(raw,ino,g,off) if len(raw)==sb.inode_size else None
+
+def _clean_name(name,inode):
+    name=(name or f"inode_{inode}").replace("/","_").replace("\\","_")
+    name=re.sub(r'[<>:"|?*\x00-\x1f]','_',name).strip(" .")
+    return name or f"inode_{inode}"
+
+def run_scan(scan_id,case_id,evidence_id):
+    s=get_scan(scan_id);image=Path(s["evidence_path"])
+    try:
+        update_scan(scan_id,status="running",started_at=now_iso())
+        _progress(scan_id,2,"hash_pre","Hashing evidence image before analysis.")
+        pre=sha256_file(image);ledger(case_id,evidence_id,scan_id,"pre_scan_hash","SHA-256",pre,"Pre-analysis evidence hash.")
+
+        meta,deleted,dirs,fs_offset,sb=scan(image,int(s["io_workers"] or 2),
+            lambda p,st,msg:_progress(scan_id,p,st,msg))
+
+        _progress(scan_id,80,"directory_scan","Reconstructing surviving deleted filenames and parent directories.")
+        reader=ReadOnlyImage(image);index=build_index(reader,sb,fs_offset,dirs)
+
+        # derive a conservative parent path from active directory structure
+        parent_map={}
+        name_map={}
+        for parent, entries in index["children_by_parent"].items():
+            for e in entries:
+                if e.inode not in name_map:
+                    name_map[e.inode]=e.name
+                    parent_map[e.inode]=parent
+
+        def full_path(parent_inode,name):
+            chain=[];cur=parent_inode;seen=set()
+            while cur and cur not in seen and len(chain)<30:
+                seen.add(cur)
+                n=name_map.get(cur)
+                if n and n not in {".",".."}:chain.append(n)
+                cur=parent_map.get(cur)
+            chain.reverse()
+            return "/" + "/".join(chain+[name]) if name else None
+
+        _progress(scan_id,84,"journal","Inspecting targeted EXT4 journal blocks.")
+        jinode=journal_inode(reader,sb,fs_offset)
+        j=inspect(reader,sb,fs_offset,jinode,{x.inode for x in deleted},settings.journal_max_blocks)
+
+        _progress(scan_id,88,"artifacts","Extracting targeted live artifacts with pytsk3.")
+        arts=extract_artifacts(image,fs_offset)
+        for a in arts.get("files",[]):
+            insert_artifact({"id":str(uuid.uuid4()),"scan_id":scan_id,**a,"type":a.get("meta_type")})
+
+        for e in arts.get("timeline",[]):
+            insert_timeline({"id":str(uuid.uuid4()),"scan_id":scan_id,**e})
+
+        _progress(scan_id,92,"findings","Creating correlated deleted-file findings.")
+        for inode in deleted:
+            candidates=index["names_by_inode"].get(inode.inode,[])
+            jhits=j.get("candidate_hits",{}).get(inode.inode,[])
+            merged=[];seen=set()
+            for item in candidates+jhits:
+                k=(item.get("name"),item.get("parent_inode"),item.get("source"),item.get("offset"))
+                if k not in seen:seen.add(k);merged.append(item)
+            name=merged[0]["name"] if merged else None
+            parent=merged[0].get("parent_inode") if merged else None
+            path=full_path(parent,name) if parent and name else None
+            if not path and name:path=f"/*/{name}"
+            score=min(1.0,.45+.2+(.1 if inode.file_type=="regular" else 0)+(.15 if name else 0)+(.1 if jhits else 0))
+            fid=str(uuid.uuid4())
+            insert_finding({
+                "id":fid,"scan_id":scan_id,"inode":inode.inode,
+                "name":name or f"deleted_inode_{inode.inode}","path":path,
+                "file_type":inode.file_type,"size_bytes":inode.size,"deletion_time":inode.dtime,
+                "mode":oct(inode.mode),"confidence":"high" if score>=.85 else "medium",
+                "confidence_score":round(score,2),"recoverable":inode.file_type=="regular",
+                "source":"+"
+                .join([x for x,ok in [("directory",bool(candidates)),("journal",bool(jhits))] if ok]) or "inode",
+                "metadata":{"inode_offset":inode.offset,"group":inode.group,"filesystem_offset":fs_offset,
+                            "block_size":sb.block_size,"uid":inode.uid,"gid":inode.gid,
+                            "mode":oct(inode.mode),"flags":f"0x{inode.flags:08x}",
+                            "atime":inode.atime_iso,"mtime":inode.mtime_iso,"ctime":inode.ctime_iso,
+                            "crtime":inode.crtime_iso,
+                            "parent_inode":parent,
+                            "name_evidence":merged,
+                            "journal":j.get("evidence",[])},
+                "original_name":name,"original_path":path,
+                "recovery_status":"candidate","validation_reason":"Not yet recovered.",
+                "journal_evidence":jhits,"original_name_candidates":merged
+            })
+
+        ledger(case_id,evidence_id,scan_id,"analysis_completed",None,None,json.dumps({
+            "ext4":meta,"deleted_candidates":len(deleted),"journal_blocks":j.get("blocks_scanned",0),
+            "targeted_artifacts":len(arts.get("files",[])),"pytsk3_status":arts.get("status")
+        },sort_keys=True))
+
+        if settings.post_scan_verify:
+            _progress(scan_id,97,"hash_post","Re-hashing evidence image for integrity verification.")
+            post=sha256_file(image);set_post_hash(evidence_id,post)
+            match=pre.lower()==post.lower()
+            ledger(case_id,evidence_id,scan_id,"post_scan_hash","SHA-256",post,f"Pre/post match: {match}")
+            if not match:
+                update_scan(scan_id,status="integrity_changed",progress=100,stage="integrity_failed",
+                            message="Evidence image hash changed during analysis.",finished_at=now_iso());return
+
+        _progress(scan_id,100,"complete",f"Scan complete. {len(deleted)} deleted inode candidates found.")
+        update_scan(scan_id,status="completed",progress=100,stage="complete",finished_at=now_iso())
+    except Exception as exc:
+        update_scan(scan_id,status="failed",progress=100,stage="error",message=str(exc),error=repr(exc),finished_at=now_iso())
+
+def recover_findings(scan_id,rows):
+    s=get_scan(scan_id);image=Path(s["evidence_path"])
+    md=json.loads(rows[0]["metadata_json"]);fs_offset=int(md["filesystem_offset"])
+    reader=ReadOnlyImage(image);sb=read_superblock(_adapter(reader),fs_offset)
+    futures={};results=[];outdir=settings.recovery_dir/scan_id
+    with ThreadPoolExecutor(max_workers=max(1,min(int(s["io_workers"] or 2),len(rows))),thread_name_prefix="recover") as ex:
+        for row in rows:
+            md=json.loads(row["metadata_json"])
+            if row["file_type"]!="regular":
+                results.append({"finding_id":row["id"],"status":"skipped","error":"Only regular files are recoverable in v0.3."});continue
+            ino=parse_inode(reader.read_at(int(md["inode_offset"]),sb.inode_size),int(row["inode"]),int(md.get("group",0)),int(md["inode_offset"]))
+            name=_clean_name(row["original_name"] or row["name"],row["inode"])
+            target=outdir/f"inode_{row['inode']}_{name}"
+            futures[ex.submit(recover,image,fs_offset,sb,ino,target)]=row
+        for fut in as_completed(futures):
+            row=futures[fut]
+            try:results.append({"finding_id":row["id"],"status":"recovered",**fut.result()})
+            except Exception as exc:results.append({"finding_id":row["id"],"status":"failed","error":str(exc)})
+
+    hashes=hash_files([r["path"] for r in results if r["status"]=="recovered"],int(s["hash_workers"] or 2))
+    for r in results:
+        row=next((x for x in rows if x["id"]==r["finding_id"]),None)
+        if not row:continue
+        if r["status"]!="recovered":
+            update_finding(row["id"],recovery_status="failed",validation_status="recovery_failed",
+                           validation_reason=r["error"],confidence="low",confidence_score=.2);continue
+        digest=hashes[r["path"]];sig=r["signature"]
+        update_finding(row["id"],recovered_path=r["path"],recovered_sha256=digest,
+                       file_signature=sig["name"],recovery_status=r["recovery_status"],
+                       recovered_size_bytes=r["bytes_written"],
+                       validation_status="size_match" if r["size_verified"] else "partial",
+                       validation_reason=r["validation_reason"],confidence="high" if r["size_verified"] else "medium",
+                       confidence_score=.95 if r["size_verified"] else .65,
+                       metadata_json=json.dumps({**json.loads(row["metadata_json"] or "{}"),"recovery":r},sort_keys=True))
+        ledger(s["case_id"],s["evidence_id"],scan_id,"recovered_file_hash","SHA-256",digest,
+               json.dumps({"finding_id":row["id"],"inode":row["inode"],"path":r["path"],
+                           "bytes_written":r["bytes_written"],"expected_bytes":r["expected_bytes"],
+                           "signature":sig},sort_keys=True))
+    return results
+</file>
+
+<file path="backend/app/__init__.py">
+
+</file>
+
+<file path="backend/app/main.py">
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import router
+from app.db.database import init_db
+init_db()
+app=FastAPI(title="EXT4 Deleted File Recovery Workbench",version="0.4.0")
+app.add_middleware(CORSMiddleware,allow_origins=["http://localhost:5173","http://127.0.0.1:5173"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+app.include_router(router)
+@app.get("/")
+def root():return {"name":"EXT4 Deleted File Recovery Workbench","version":"0.4.0","docs":"/docs"}
+</file>
+
+<file path="backend/data/integrity-ledger.jsonl">
+{"algorithm": "SHA-256", "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:23.427404+00:00", "details": "Evidence hash before analysis.", "entry_hash": "790b90ab996aaf25d01ddc461ab05ebcc78e532b64573a46e5715697b5264695", "event_type": "pre_scan_hash", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": null, "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:24.697489+00:00", "details": "{\"deleted_candidates\": 3, \"directories_scanned\": 13, \"ext4\": {\"block_size\": 4096, \"blocks_count\": 12288, \"features\": {\"compat\": \"0x0000003c\", \"incompat\": \"0x000002c2\", \"ro_compat\": \"0x0000046b\"}, \"filesystem\": \"EXT4\", \"filesystem_offset\": 0, \"groups\": 1, \"inode_size\": 256, \"inodes_count\": 12288, \"inodes_per_group\": 12288, \"journal_inode\": 8}, \"journal_blocks_scanned\": 1024, \"pytsk3\": {\"block_size\": 4096, \"message\": \"pytsk3 opened the same filesystem offset.\", \"root_inode\": 2, \"status\": \"ok\"}}", "entry_hash": "f020d9c2465727f39a577a77cf282b0a5f6580768ed24d666bd6fd5c136b1323", "event_type": "analysis_completed", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "790b90ab996aaf25d01ddc461ab05ebcc78e532b64573a46e5715697b5264695", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": null}
+{"algorithm": "SHA-256", "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:24.864433+00:00", "details": "Pre/post match: True", "entry_hash": "935d2c47575e2b942acd6025beb54d0228725e0df6cc0e6eb8095c3bb8d1916f", "event_type": "post_scan_hash", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "f020d9c2465727f39a577a77cf282b0a5f6580768ed24d666bd6fd5c136b1323", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": "SHA-256", "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:44.224253+00:00", "details": "{\"bytes_written\": 415, \"expected_bytes\": 415, \"finding_id\": \"11a0f8be-bce9-44fc-9d05-5588d71efe2b\", \"inode\": 24, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\6369211d-78d2-4a57-bb4a-75d4d8642ce7\\\\inode_24_orion-export.zip\", \"signature\": {\"confidence\": \"high\", \"extension\": \".zip\", \"mime\": \"application/zip\", \"name\": \"ZIP archive / OOXML container\"}}", "entry_hash": "a10b84030a17a8579b69cef2ca600e2c4a4918786cc6438b7a7250b74415bfb8", "event_type": "recovered_file_hash", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "935d2c47575e2b942acd6025beb54d0228725e0df6cc0e6eb8095c3bb8d1916f", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": "efcf223d1b05b77f5c3e525c80e64109e25394f0251dcc65a3f46fc87ecee624"}
+{"algorithm": "SHA-256", "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:44.256669+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"9c37681b-c4ef-4d8e-b078-ba990c3e5f9c\", \"inode\": 25, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\6369211d-78d2-4a57-bb4a-75d4d8642ce7\\\\inode_25_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "08c0232f0d5ad35f83bfb76283f3648a0144f5d5e45a36945d714808a154cb7c", "event_type": "recovered_file_hash", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "a10b84030a17a8579b69cef2ca600e2c4a4918786cc6438b7a7250b74415bfb8", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "a13727b1-255a-4dba-a722-459133980ee0", "created_at": "2026-09-28T14:52:44.270551+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"bc4411c0-df55-4590-94d5-371aaa248600\", \"inode\": 22, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\6369211d-78d2-4a57-bb4a-75d4d8642ce7\\\\inode_22_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "9acfa0e4f6bae4acdeb83207de4e713da0e0bf715ea196f646133c706eb59e1a", "event_type": "recovered_file_hash", "evidence_id": "c1806c2d-dab3-4b1d-bf98-adb3d400ec5c", "previous_hash": "08c0232f0d5ad35f83bfb76283f3648a0144f5d5e45a36945d714808a154cb7c", "scan_id": "6369211d-78d2-4a57-bb4a-75d4d8642ce7", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:02.433934+00:00", "details": "Pre-analysis evidence hash.", "entry_hash": "de86d0ebedf2528b231636e077d5eea4ee0926e031d8ba1ca2294ba0e05f6083", "event_type": "pre_scan_hash", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "9acfa0e4f6bae4acdeb83207de4e713da0e0bf715ea196f646133c706eb59e1a", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": null, "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:03.227805+00:00", "details": "{\"deleted_candidates\": 3, \"ext4\": {\"block_size\": 4096, \"blocks_count\": 12288, \"features\": {\"compat\": \"0x0000003c\", \"incompat\": \"0x000002c2\", \"ro_compat\": \"0x0000046b\"}, \"filesystem\": \"ext4\", \"filesystem_offset\": 0, \"groups\": 1, \"inode_size\": 256, \"inodes_count\": 12288, \"inodes_per_group\": 12288, \"journal_inode\": 8, \"uuid\": \"8cc7c565-e64c-435a-99f8-5fa8e1fc1e06\", \"volume_label\": \"SYNAPSE_LAB\"}, \"journal_blocks\": 1024, \"pytsk3_status\": \"ok\", \"targeted_artifacts\": 0}", "entry_hash": "eee7de7f12d6a9a51eaa24b5e60faedff9f1f49a717b2b97c7ea836186d46c75", "event_type": "analysis_completed", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "de86d0ebedf2528b231636e077d5eea4ee0926e031d8ba1ca2294ba0e05f6083", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": null}
+{"algorithm": "SHA-256", "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:03.750571+00:00", "details": "Pre/post match: True", "entry_hash": "eb7e41ecafeeb96444a4e7a436d342f4793a766d10966a6bec1e258afed687c2", "event_type": "post_scan_hash", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "eee7de7f12d6a9a51eaa24b5e60faedff9f1f49a717b2b97c7ea836186d46c75", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": "SHA-256", "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:11.120400+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"52a2a6e8-b8ee-49c9-968e-0b4621ec66fd\", \"inode\": 22, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\2c552ca3-7c65-4555-9888-d510f9745456\\\\inode_22_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "b05f5fe15c7d344c0be628498d1996ade2a3b85dab46bf549f16fb68a2863c20", "event_type": "recovered_file_hash", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "eb7e41ecafeeb96444a4e7a436d342f4793a766d10966a6bec1e258afed687c2", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:11.135410+00:00", "details": "{\"bytes_written\": 415, \"expected_bytes\": 415, \"finding_id\": \"b367b5d0-eb64-43ba-86e5-4e4f411f30f6\", \"inode\": 24, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\2c552ca3-7c65-4555-9888-d510f9745456\\\\inode_24_orion-export.zip\", \"signature\": {\"confidence\": \"high\", \"extension\": \".zip\", \"mime\": \"application/zip\", \"name\": \"ZIP archive / OOXML container\"}}", "entry_hash": "59d83958046af1dfce630c9d496f4abfe59a8c9bda8f9eb8fab134588127ca36", "event_type": "recovered_file_hash", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "b05f5fe15c7d344c0be628498d1996ade2a3b85dab46bf549f16fb68a2863c20", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": "efcf223d1b05b77f5c3e525c80e64109e25394f0251dcc65a3f46fc87ecee624"}
+{"algorithm": "SHA-256", "case_id": "19512a86-f742-44cc-8f56-b4b4b2c052cf", "created_at": "2026-09-28T15:26:11.151462+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"d3f048cb-2035-4ab4-984f-803a649ca4dd\", \"inode\": 25, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\2c552ca3-7c65-4555-9888-d510f9745456\\\\inode_25_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "4f2798f234dec59401bd3adab0b5c38f32139db37d4eda3e0b2f9a2be1226b8e", "event_type": "recovered_file_hash", "evidence_id": "cd581be5-fbd5-4618-94de-1fd1badc25a8", "previous_hash": "59d83958046af1dfce630c9d496f4abfe59a8c9bda8f9eb8fab134588127ca36", "scan_id": "2c552ca3-7c65-4555-9888-d510f9745456", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:40:56.171332+00:00", "details": "Pre-analysis evidence hash.", "entry_hash": "7b66cabb027bed9b02f7af886c2e920d77596ba8b60cd4e390b3b75b3236cb85", "event_type": "pre_scan_hash", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "4f2798f234dec59401bd3adab0b5c38f32139db37d4eda3e0b2f9a2be1226b8e", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": null, "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:40:56.389030+00:00", "details": "{\"deleted_candidates\": 3, \"ext4\": {\"block_size\": 4096, \"blocks_count\": 12288, \"features\": {\"compat\": \"0x0000003c\", \"incompat\": \"0x000002c2\", \"ro_compat\": \"0x0000046b\"}, \"filesystem\": \"ext4\", \"filesystem_offset\": 0, \"groups\": 1, \"inode_size\": 256, \"inodes_count\": 12288, \"inodes_per_group\": 12288, \"journal_inode\": 8, \"uuid\": \"8cc7c565-e64c-435a-99f8-5fa8e1fc1e06\", \"volume_label\": \"SYNAPSE_LAB\"}, \"journal_blocks\": 1024, \"pytsk3_status\": \"ok\", \"targeted_artifacts\": 0}", "entry_hash": "9cbe3626f1edb86ec5b01067150fb16445c45ee6fd978613692d2f27d58bf9ab", "event_type": "analysis_completed", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "7b66cabb027bed9b02f7af886c2e920d77596ba8b60cd4e390b3b75b3236cb85", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": null}
+{"algorithm": "SHA-256", "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:40:56.537732+00:00", "details": "Pre/post match: True", "entry_hash": "8a5a86772a940dba3f66bb55addb76d11df74f2a6de28056d40e82744d814564", "event_type": "post_scan_hash", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "9cbe3626f1edb86ec5b01067150fb16445c45ee6fd978613692d2f27d58bf9ab", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": "SHA-256", "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:41:10.180841+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"0d169315-15a2-48ee-8ff7-92efd8d3c09b\", \"inode\": 22, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\aa4743d1-869b-478f-85f9-a84705e0f962\\\\inode_22_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "429797c6fa894b02fe13e88151d0376cebaf3054e29a001e10b693ae91e83513", "event_type": "recovered_file_hash", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "8a5a86772a940dba3f66bb55addb76d11df74f2a6de28056d40e82744d814564", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:41:10.198686+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"7ec191fc-5368-4734-a6ef-9389bed67adb\", \"inode\": 25, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\aa4743d1-869b-478f-85f9-a84705e0f962\\\\inode_25_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "8a4100829493b3c21f54bdd6822d4f1a6118a87784483eca80468738cd6da9f8", "event_type": "recovered_file_hash", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "429797c6fa894b02fe13e88151d0376cebaf3054e29a001e10b693ae91e83513", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "5d70a6a7-a64d-46d7-93a7-94258e509edb", "created_at": "2026-09-28T15:41:10.213637+00:00", "details": "{\"bytes_written\": 415, \"expected_bytes\": 415, \"finding_id\": \"b0b8f8fe-0dd1-400f-8b93-4a46c3874a3d\", \"inode\": 24, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\aa4743d1-869b-478f-85f9-a84705e0f962\\\\inode_24_orion-export.zip\", \"signature\": {\"confidence\": \"high\", \"extension\": \".zip\", \"mime\": \"application/zip\", \"name\": \"ZIP archive / OOXML container\"}}", "entry_hash": "7879dbeeecc70f09203a4ca4d60f5877e325de1c742ba22cb91b56e208a036ec", "event_type": "recovered_file_hash", "evidence_id": "b8319c00-c358-4685-8813-5b3783b156a7", "previous_hash": "8a4100829493b3c21f54bdd6822d4f1a6118a87784483eca80468738cd6da9f8", "scan_id": "aa4743d1-869b-478f-85f9-a84705e0f962", "value": "efcf223d1b05b77f5c3e525c80e64109e25394f0251dcc65a3f46fc87ecee624"}
+{"algorithm": "SHA-256", "case_id": "ec9454ed-842f-4f8b-859f-42b229f613e8", "created_at": "2026-09-28T16:24:40.530627+00:00", "details": "Pre-analysis evidence hash.", "entry_hash": "b1e919902d40c2767322032a27bf958ec0864582603948ab45e2974a863f56af", "event_type": "pre_scan_hash", "evidence_id": "76f3ae1e-d45a-44d3-a330-a864d37dc00c", "previous_hash": "7879dbeeecc70f09203a4ca4d60f5877e325de1c742ba22cb91b56e208a036ec", "scan_id": "e54dfc51-f584-4039-9182-43403cad1fd1", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": null, "case_id": "ec9454ed-842f-4f8b-859f-42b229f613e8", "created_at": "2026-09-28T16:24:40.694018+00:00", "details": "{\"deleted_candidates\": 3, \"ext4\": {\"block_size\": 4096, \"blocks_count\": 12288, \"features\": {\"compat\": \"0x0000003c\", \"incompat\": \"0x000002c2\", \"ro_compat\": \"0x0000046b\"}, \"filesystem\": \"ext4\", \"filesystem_offset\": 0, \"groups\": 1, \"inode_size\": 256, \"inodes_count\": 12288, \"inodes_per_group\": 12288, \"journal_inode\": 8, \"uuid\": \"8cc7c565-e64c-435a-99f8-5fa8e1fc1e06\", \"volume_label\": \"SYNAPSE_LAB\"}, \"journal_blocks\": 1024, \"pytsk3_status\": \"ok\", \"targeted_artifacts\": 7}", "entry_hash": "16a17abe44d0d42d6b69ea5ec6481881163b297459651b2b9e91d04aea6f888b", "event_type": "analysis_completed", "evidence_id": "76f3ae1e-d45a-44d3-a330-a864d37dc00c", "previous_hash": "b1e919902d40c2767322032a27bf958ec0864582603948ab45e2974a863f56af", "scan_id": "e54dfc51-f584-4039-9182-43403cad1fd1", "value": null}
+{"algorithm": "SHA-256", "case_id": "ec9454ed-842f-4f8b-859f-42b229f613e8", "created_at": "2026-09-28T16:24:40.752363+00:00", "details": "Pre/post match: True", "entry_hash": "933fbbaeb3cbe4a6a8cc8860b535910bdc33753bf03646769ab8ee35c7ea7bc7", "event_type": "post_scan_hash", "evidence_id": "76f3ae1e-d45a-44d3-a330-a864d37dc00c", "previous_hash": "16a17abe44d0d42d6b69ea5ec6481881163b297459651b2b9e91d04aea6f888b", "scan_id": "e54dfc51-f584-4039-9182-43403cad1fd1", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": "SHA-256", "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:27:25.594762+00:00", "details": "Pre-analysis evidence hash.", "entry_hash": "811aefdee86d526a0c7d22b9ff6d849d8b66419ecfaa4bc1b9f6e1e502f57ffb", "event_type": "pre_scan_hash", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "933fbbaeb3cbe4a6a8cc8860b535910bdc33753bf03646769ab8ee35c7ea7bc7", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": null, "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:27:25.763936+00:00", "details": "{\"deleted_candidates\": 3, \"ext4\": {\"block_size\": 4096, \"blocks_count\": 12288, \"features\": {\"compat\": \"0x0000003c\", \"incompat\": \"0x000002c2\", \"ro_compat\": \"0x0000046b\"}, \"filesystem\": \"ext4\", \"filesystem_offset\": 0, \"groups\": 1, \"inode_size\": 256, \"inodes_count\": 12288, \"inodes_per_group\": 12288, \"journal_inode\": 8, \"uuid\": \"8cc7c565-e64c-435a-99f8-5fa8e1fc1e06\", \"volume_label\": \"SYNAPSE_LAB\"}, \"journal_blocks\": 1024, \"pytsk3_status\": \"ok\", \"targeted_artifacts\": 7}", "entry_hash": "76de9bd11088074772a71296ac13aa43d2d27fde43c36d54243519be1d35e2c8", "event_type": "analysis_completed", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "811aefdee86d526a0c7d22b9ff6d849d8b66419ecfaa4bc1b9f6e1e502f57ffb", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": null}
+{"algorithm": "SHA-256", "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:27:25.830121+00:00", "details": "Pre/post match: True", "entry_hash": "e08ea0933be87ae1455d695df21406559b49f08b98ecb02d86cab82f356828e9", "event_type": "post_scan_hash", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "76de9bd11088074772a71296ac13aa43d2d27fde43c36d54243519be1d35e2c8", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": "8f1f0c94d35c70a7d0cad5087fcd353d062ed7078c6d4f2099fde41df90e2461"}
+{"algorithm": "SHA-256", "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:30:26.349397+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"21aeb4f2-ff29-4273-a9f2-cf7ecbfca840\", \"inode\": 22, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\7a16375d-7683-41a6-be4b-ab5891b75cb0\\\\inode_22_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "e720355c19339aa12bfeaf25c0c9d355150b7bb24c4c8289ebcfb8df90b7077f", "event_type": "recovered_file_hash", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "e08ea0933be87ae1455d695df21406559b49f08b98ecb02d86cab82f356828e9", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:30:26.357904+00:00", "details": "{\"bytes_written\": 357, \"expected_bytes\": 357, \"finding_id\": \"516d24fd-2db5-4b02-a839-2cdaac048739\", \"inode\": 25, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\7a16375d-7683-41a6-be4b-ab5891b75cb0\\\\inode_25_orion-report.pdf\", \"signature\": {\"confidence\": \"high\", \"extension\": \".pdf\", \"mime\": \"application/pdf\", \"name\": \"PDF document\"}}", "entry_hash": "71740282edb61026234e74baee080401fbfe7887ad50ac42a9d16ecfe6934bc9", "event_type": "recovered_file_hash", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "e720355c19339aa12bfeaf25c0c9d355150b7bb24c4c8289ebcfb8df90b7077f", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": "58e5e670dd1310ce5894ea53b8511bb0aeaf6149132de44c7e8af1be0c69f4b9"}
+{"algorithm": "SHA-256", "case_id": "1f0d6c9d-bd28-472a-8d44-67638fca1544", "created_at": "2026-09-28T16:30:26.366142+00:00", "details": "{\"bytes_written\": 415, \"expected_bytes\": 415, \"finding_id\": \"ed5ab744-47b6-494f-a045-11c7de43686c\", \"inode\": 24, \"path\": \"D:\\\\Important documents(studies)\\\\Projects\\\\ext4-forensics-capstone\\\\backend\\\\recovered\\\\7a16375d-7683-41a6-be4b-ab5891b75cb0\\\\inode_24_orion-export.zip\", \"signature\": {\"confidence\": \"high\", \"extension\": \".zip\", \"mime\": \"application/zip\", \"name\": \"ZIP archive / OOXML container\"}}", "entry_hash": "1feefa10b11709e79bc2d95b4b2529b70096c07ba823860e0f124bc9c4048aae", "event_type": "recovered_file_hash", "evidence_id": "4f35843f-2e06-4f0b-920b-f94099971d06", "previous_hash": "71740282edb61026234e74baee080401fbfe7887ad50ac42a9d16ecfe6934bc9", "scan_id": "7a16375d-7683-41a6-be4b-ab5891b75cb0", "value": "efcf223d1b05b77f5c3e525c80e64109e25394f0251dcc65a3f46fc87ecee624"}
+</file>
+
+<file path="backend/scripts/refresh_scan_artifacts.py">
+from __future__ import annotations
+import argparse
+from app.services.artifact_service import refresh_artifacts
+
+parser=argparse.ArgumentParser(description="Refresh live filesystem artifacts for an existing scan without rescanning inodes.")
+parser.add_argument("scan_id")
+args=parser.parse_args()
+result=refresh_artifacts(args.scan_id,force=True)
+print(result["message"])
+print("Artifacts:",len(result.get("files",[])))
+print("Timeline events:",len(result.get("timeline",[])))
+</file>
+
+<file path="backend/tests/test_core.py">
+from app.api.routes import normalize_windows_path
+from app.forensics.signatures import identify_bytes
+from app.forensics.directory_entries import parse_dir_block
+
+def test_windows_path_normalization():
+    assert str(normalize_windows_path('"C:\\evidence\\lab01.img"')).endswith("C:\\evidence\\lab01.img")
+
+def test_signatures():
+    assert identify_bytes(b"%PDF-1.7").extension == ".pdf"
+    assert identify_bytes(b"\x89PNG\r\n\x1a\n").extension == ".png"
+
+def test_dirent():
+    name=b"report.pdf"
+    rec=((8+len(name)+3)//4)*4
+    b=bytearray(rec+4096-4096%rec if rec<4096 else rec)
+    b[0:4]=(22).to_bytes(4,"little"); b[4:6]=rec.to_bytes(2,"little")
+    b[6]=len(name); b[7]=1; b[8:8+len(name)]=name
+    entries=parse_dir_block(bytes(b),2,0)
+    assert any(e.inode==22 and e.name=="report.pdf" for e in entries)
+</file>
+
+<file path="backend/tests/test_docx_report.py">
+from pathlib import Path
+from unittest.mock import patch
+from app.services import docx_report
+
+def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
+    report = {
+        "evidence": {
+            "path": "test.raw", "size_bytes": 1024,
+            "pre_scan_sha256": "a"*64, "post_scan_sha256": "a"*64,
+            "integrity_match": True
+        },
+        "tooling": {"resource_policy": {"io_workers": 1, "hash_workers": 1, "policy": "laptop"}},
+        "filesystem": "ext4", "volume_label": "TEST",
+        "filesystem_metadata": {"uuid": "u", "block_size": 4096, "inodes_count": 10, "blocks_count": 20},
+        "deleted_files": [{
+            "inode": 22, "original_name": "orion-report.pdf", "original_path": "/home/alex/Documents/orion-report.pdf",
+            "size_bytes": 357, "deletion_time": "2026-06-18T07:18:33+00:00",
+            "recovery_status": "complete", "validation_status": "size_match",
+            "source": "directory", "recovered_size_bytes": 357,
+            "recovered_sha256": "b"*64
+        }],
+        "lab02_deliverables": {
+            "1_image_sha256": "a"*64,
+            "2_filesystem_and_volume_label": {"filesystem": "ext4", "volume_label": "TEST"},
+            "3_deleted_files_and_inodes": [{
+                "inode": 22, "original_name": "orion-report.pdf",
+                "original_path": "/home/alex/Documents/orion-report.pdf",
+                "size_bytes": 357, "recovery_status": "complete"
+            }],
+            "4_usb_connected": None, "5_archive_created": None,
+            "6_confidential_document_recovered": None,
+            "7_icat_vs_carving": {"metadata_recovery": "x", "carving": "y"},
+            "8_facts_and_hypotheses": {"facts": [], "hypotheses": []}
+        },
+        "timeline": [],
+        "live_artifacts": [{
+            "path": "/var/log/activity.log", "inode": 31, "size_bytes": 500,
+            "mtime": None, "content_sha256": "c"*64, "content": "sample"
+        }],
+        "recovered_content": [],
+        "recovered_archive_analysis": None,
+        "integrity_ledger": {"message": "Ledger verified (1 event)."},
+        "integrity_events": [],
+        "limitations": []
+    }
+    out = tmp_path / "report.docx"
+    with patch.object(docx_report, "build_report", return_value=report):
+        docx_report.generate_docx("12345678-test", out)
+    assert out.exists()
+    assert out.stat().st_size > 0
+</file>
+
+<file path="backend/tests/test_docx_xml_safety.py">
+from unittest.mock import patch
+from app.services import docx_report
+
+def test_docx_sanitizes_null_and_control_characters(tmp_path):
+    report = {
+        "evidence": {
+            "path": "C:/evidence/test.raw\x00",
+            "size_bytes": 48,
+            "pre_scan_sha256": "a" * 64,
+            "post_scan_sha256": "a" * 64,
+            "integrity_match": True
+        },
+        "tooling": {"resource_policy": {"io_workers": 1, "hash_workers": 1, "policy": "laptop"}},
+        "filesystem": "ext4\x01",
+        "volume_label": "TEST\x00",
+        "filesystem_metadata": {"uuid": "u", "block_size": 4096, "inodes_count": 10, "blocks_count": 20},
+        "deleted_files": [{
+            "inode": 22, "original_name": "orion-report.pdf",
+            "original_path": "/home/alex/Documents/orion-report.pdf",
+            "size_bytes": 357, "deletion_time": "2026-06-18T07:18:33+00:00",
+            "recovery_status": "complete", "validation_status": "size_match",
+            "source": "directory", "recovered_size_bytes": 357,
+            "recovered_sha256": "b" * 64, "recovered_path": "C:/recovered/x.pdf"
+        }],
+        "lab02_deliverables": {
+            "1_image_sha256": "a" * 64,
+            "2_filesystem_and_volume_label": {"filesystem": "ext4", "volume_label": "TEST"},
+            "3_deleted_files_and_inodes": [],
+            "4_usb_connected": {"timestamp": "2026-06-18T09:06:41+02:00", "details": "label=TRANSFER\x00"},
+            "5_archive_created": None,
+            "6_confidential_document_recovered": None,
+            "7_icat_vs_carving": {"metadata_recovery": "x", "carving": "y"},
+            "8_facts_and_hypotheses": {"facts": ["fact\x02"], "hypotheses": ["hypothesis\x0b"]}
+        },
+        "timeline": [{
+            "timestamp": "2026-06-18T09:06:41+02:00", "source": "activity.log",
+            "event": "usb_connected", "details": "serial=SN\x00"
+        }],
+        "live_artifacts": [{
+            "path": "/var/log/activity.log",
+            "inode": 31,
+            "size_bytes": 20,
+            "mtime": None,
+            "content_sha256": "c" * 64,
+            "content": "USB\x00connected\x0bserial"
+        }],
+        "recovered_content": [{
+            "inode": 22,
+            "strings": "Project ORION\x00CONFIDENTIAL\x1f"
+        }],
+        "recovered_archive_analysis": None,
+        "integrity_ledger": {"message": "Ledger verified."},
+        "integrity_events": [],
+        "limitations": ["Limit\x00"]
+    }
+
+    out = tmp_path / "safe.docx"
+    with patch.object(docx_report, "build_report", return_value=report):
+        docx_report.generate_docx("test-scan", out)
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+</file>
+
+<file path="backend/tests/test_ext4_structs.py">
+from app.forensics.ext4_structs import (
+    EXT4_MAGIC,
+    parse_superblock,
+    parse_inode,
+)
+
+
+def test_parse_minimal_superblock():
+    data = bytearray(1024)
+    data[0:4] = (100).to_bytes(4, "little")
+    data[4:8] = (10000).to_bytes(4, "little")
+    data[20:24] = (1).to_bytes(4, "little")
+    data[24:28] = (2).to_bytes(4, "little")  # 4096-byte blocks
+    data[32:36] = (32768).to_bytes(4, "little")
+    data[40:44] = (8192).to_bytes(4, "little")
+    data[56:58] = EXT4_MAGIC.to_bytes(2, "little")
+    data[88:90] = (256).to_bytes(2, "little")
+    sb = parse_superblock(bytes(data))
+    assert sb.block_size == 4096
+    assert sb.inode_size == 256
+    assert sb.magic == EXT4_MAGIC
+
+
+def test_deleted_inode_signal():
+    data = bytearray(256)
+    data[0:2] = (0x81A4).to_bytes(2, "little")       # regular file + mode
+    data[4:8] = (1234).to_bytes(4, "little")
+    data[20:24] = (100).to_bytes(4, "little")        # deletion time
+    data[26:28] = (0).to_bytes(2, "little")          # links count
+    inode = parse_inode(bytes(data), 123, 0, 4096)
+    assert inode.is_deleted
+    assert inode.file_type == "regular"
+    assert inode.size == 1234
+</file>
+
+<file path="backend/tests/test_signatures.py">
+from app.forensics.signatures import identify
+def test_pdf(): assert identify(b"%PDF-1.7").extension==".pdf"
+def test_zip(): assert identify(b"PK\x03\x04").extension==".zip"
+def test_text(): assert identify(b"hello\nworld").extension==".txt"
+</file>
+
+<file path="backend/tools/__init__.py">
+
+</file>
+
+<file path="backend/.env.example">
+APP_DATA_DIR=./data
+RECOVERY_DIR=./recovered
+REPORT_DIR=./reports
+INTEGRITY_LEDGER=./data/integrity-ledger.jsonl
+
+MAX_IO_WORKERS=2
+MAX_HASH_WORKERS=2
+MAX_CONCURRENT_SCANS=1
+MAX_RECOVERY_BYTES=10737418240
+CHUNK_SIZE_MB=4
+POST_SCAN_VERIFY=true
+JOURNAL_MAX_BLOCKS=8192
+TEXT_ARTIFACT_MAX_BYTES=1048576
+</file>
+
+<file path="backend/README.md">
+# Backend — EXT4 Deleted File Recovery v0.2
+
+Windows-native friendly FastAPI backend.
+
+### Start
+
+```powershell
+cd backend
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### Main features
+
+- SHA-256 before/after evidence hash
+- local SQLite casebook
+- append-only chained JSONL integrity ledger
+- Windows quoted path normalization
+- bounded scan/recovery/hash threads
+- live CPU/RAM telemetry
+- EXT4 superblock / group descriptor / inode parsing
+- deleted inode candidate extraction
+- deleted directory-entry parsing + slack heuristic
+- conservative name/path reconstruction
+- file signature identification
+- complete/partial/not-recoverable classification
+- targeted JBD2 journal-inode inspection and inode/name correlation
+- pytsk3 independent filesystem cross-check
+- recovered-file download
+- JSON/CSV report export
+
+### Scope
+
+This is an academic capstone implementation, not a validated commercial forensic product.
+Journal handling extracts evidence and correlations; it does not replay every JBD2 transaction.
+</file>
+
+<file path="backend/requirements.txt">
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+pydantic>=2.11,<3
+psutil>=7.0,<8
+pytsk3>=20260701
+python-docx>=1.1,<2
+pytest>=8.4,<9
+</file>
+
+<file path="docs/LAB02_REPORT_STRUCTURE.md">
+# Lab #02 report structure in v0.4
+
+The generated report follows the lab's requested six beats:
+
+1. Mandate
+2. Integrity
+3. Method
+4. Findings
+5. Limits
+6. Conclusion
+
+It also explicitly answers the eight deliverables:
+
+1. image SHA-256
+2. filesystem + volume label
+3. deleted files + inode numbers
+4. USB connection time
+5. archive creation time
+6. confidential document + recovery method
+7. metadata recovery vs carving
+8. facts vs hypotheses
+
+The application adds live-artifact inventory, timeline rows, recovered-content strings, and recovered-ZIP member analysis so the report can show supporting evidence rather than just the final answer.
+
+## v0.4 implementation note
+
+The artifact extractor uses pytsk3's root-directory traversal and reads file contents directly from each directory entry. This avoids the path-reopen failure mode that caused empty artifact sections in the earlier report.
+</file>
+
+<file path="frontend/src/components/Metric.jsx">
+export default function Metric({label,value,hint}){return <div className="metric"><div className="mlabel">{label}</div><div className="mvalue">{value}</div><div className="mhint">{hint}</div></div>}
+</file>
+
+<file path="frontend/src/components/MetricCard.jsx">
+export default function MetricCard({ label, value, hint }) {
+  return (
+    <div className="metric-card">
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value}</div>
+      {hint && <div className="metric-hint">{hint}</div>}
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/Pill.jsx">
+export default function Pill({value,tone="neutral"}){return <span className={`pill ${tone}`}>{value||"—"}</span>}
+</file>
+
+<file path="frontend/src/components/Progress.jsx">
+export default function Progress({value}){let p=Math.max(0,Math.min(100,Number(value||0)));return <div className="progress"><div className="track"><div className="fill" style={{width:`${p}%`}}/></div><b>{p.toFixed(1)}%</b></div>}
+</file>
+
+<file path="frontend/src/components/ProgressBar.jsx">
+export default function ProgressBar({ value }) {
+  const clamped = Math.max(0, Math.min(100, Number(value || 0)));
+  return (
+    <div className="progress-shell" aria-label={`Progress ${clamped.toFixed(1)}%`}>
+      <div className="progress-fill" style={{ width: `${clamped}%` }} />
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/StatusPill.jsx">
+export default function StatusPill({ status }) {
+  const key = String(status || "").toLowerCase();
+  return <span className={`pill pill-${key}`}>{status || "unknown"}</span>;
+}
+</file>
+
+<file path="frontend/src/lib/api.js">
+const BASE="http://127.0.0.1:8000/api";
+async function req(path,opt={}){const r=await fetch(BASE+path,{headers:{"Content-Type":"application/json",...(opt.headers||{})},...opt});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||`Request failed (${r.status})`);return b}
+export const api={
+ resources:()=>req("/system/resources"),
+ createScan:p=>req("/scans",{method:"POST",body:JSON.stringify(p)}),
+ scan:id=>req(`/scans/${id}`), findings:id=>req(`/scans/${id}/findings`),
+ artifacts:id=>req(`/scans/${id}/artifacts`), refreshArtifacts:id=>req(`/scans/${id}/artifacts/refresh`,{method:"POST"}),
+ integrity:id=>req(`/cases/${id}/integrity`),
+ recover:(id,ids)=>req(`/scans/${id}/recover`,{method:"POST",body:JSON.stringify({finding_ids:ids})}),
+ reportJson:id=>`${BASE}/scans/${id}/report.json`, reportDocx:id=>`${BASE}/scans/${id}/report.docx`, download:id=>`${BASE}/findings/${id}/download`
+};
+</file>
+
+<file path="frontend/src/pages/Dashboard.jsx">
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../lib/api";
+import Pill from "../components/Pill";
+import Progress from "../components/Progress";
+import Metric from "../components/Metric";
+
+const savedPath = localStorage.getItem("lastEvidencePath") || "";
+const savedScan = localStorage.getItem("lastScanId") || "";
+
+function tone(value) {
+  const v = String(value || "").toLowerCase();
+  if (["completed", "complete", "high", "size_match", "recovered", "match"].includes(v)) return "good";
+  if (["running", "candidate", "medium", "partial", "pending"].includes(v)) return "info";
+  if (["failed", "integrity_changed", "low", "not_recoverable", "recovery_failed", "changed"].includes(v)) return "bad";
+  return "neutral";
+}
+
+export default function Dashboard() {
+  const [form, setForm] = useState({
+    caseName: "EXT4 recovery case",
+    imagePath: savedPath,
+  });
+  const [workers, setWorkers] = useState({ io: 1, hash: 2 });
+  const [scanId, setScanId] = useState(savedScan);
+  const [scan, setScan] = useState(null);
+  const [findings, setFindings] = useState([]);
+  const [resources, setResources] = useState(null);
+  const [integrity, setIntegrity] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer;
+
+    async function pollResources() {
+      try {
+        const data = await api.resources();
+        if (!cancelled) setResources(data);
+      } catch {
+        // Backend may be temporarily unavailable while the UI starts.
+      }
+      timer = window.setTimeout(pollResources, 2000);
+    }
+
+    pollResources();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!scanId) return;
+
+    let cancelled = false;
+    let timer;
+
+    async function pollScan() {
+      try {
+        const current = await api.scan(scanId);
+        if (cancelled) return;
+
+        setScan(current);
+        const rows = await api.findings(scanId);
+        if (cancelled) return;
+        setFindings(rows);
+
+        try {
+          const integrityData = await api.integrity(current.case_id);
+          if (!cancelled) setIntegrity(integrityData);
+        } catch {
+          // Keep scan page usable even if integrity endpoint is temporarily unavailable.
+        }
+
+        if (!["completed", "failed", "integrity_changed"].includes(current.status)) {
+          timer = window.setTimeout(pollScan, 1500);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+        timer = window.setTimeout(pollScan, 1800);
+      }
+    }
+
+    pollScan();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [scanId]);
+
+  const recoverable = useMemo(
+    () => findings.filter((item) => Boolean(item.recoverable) && item.file_type === "regular"),
+    [findings]
+  );
+
+  function selectAll() {
+    setSelected(new Set(recoverable.map((item) => item.id)));
+  }
+
+  async function startScan(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setSelected(new Set());
+
+    try {
+      const result = await api.createScan({
+        image_path: form.imagePath,
+        case_name: form.caseName,
+        io_workers: workers.io,
+        hash_workers: workers.hash,
+        resource_policy: "laptop",
+      });
+
+      localStorage.setItem("lastEvidencePath", form.imagePath);
+      localStorage.setItem("lastScanId", result.scan_id);
+      setScanId(result.scan_id);
+      setScan(null);
+      setFindings([]);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggle(id) {
+    setSelected((old) => {
+      const next = new Set(old);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function recoverSelected() {
+    if (!selected.size) return;
+
+    setRecovering(true);
+    setMessage("");
+    try {
+      const result = await api.recover(scanId, [...selected]);
+      const ok = result.results.filter((item) => item.status === "recovered").length;
+      const partial = result.results.filter((item) => item.recovery_status === "partial").length;
+      setMessage(`${ok} file(s) processed. ${partial} partial result(s).`);
+      setFindings(await api.findings(scanId));
+      if (scan?.case_id) setIntegrity(await api.integrity(scan.case_id));
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setRecovering(false);
+    }
+  }
+
+  const final = scan && ["completed", "failed", "integrity_changed"].includes(scan.status);
+  const hashMatch =
+    Boolean(scan?.post_scan_sha256) &&
+    scan.pre_scan_sha256 === scan.post_scan_sha256;
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark">✓</div>
+          <div>
+            <div className="brand-title">EXT4 FORENSICS</div>
+            <div className="brand-subtitle">Deleted File Recovery Workbench</div>
+          </div>
+        </div>
+        <div className="topbar-status">
+          <span className="online-dot" />
+          Local analysis · Windows
+        </div>
+      </header>
+
+      <main className="content">
+        <section className="hero">
+          <div>
+            <div className="eyebrow">CYBER FORENSICS CAPSTONE · LAB #02</div>
+            <h1>Recover. Correlate. Validate.</h1>
+            <p>
+              Analyze EXT4 metadata, recover deleted content, preserve evidence
+              integrity, and export a forensic report.
+            </p>
+          </div>
+          <div className="hero-symbol">EXT4</div>
+        </section>
+
+        <section className="two-col">
+          <section className="panel">
+            <div className="section-head">
+              <div>
+                <div className="kicker">01 · EVIDENCE</div>
+                <h2>Start a forensic analysis</h2>
+              </div>
+              <Pill value="READ-ONLY" tone="good" />
+            </div>
+
+            <div className="safety">
+              <strong>Evidence protection</strong>
+              <span>The original image is not modified. Recovered files and reports are stored separately.</span>
+            </div>
+
+            <form className="form" onSubmit={startScan}>
+              <label>
+                Case name
+                <input
+                  value={form.caseName}
+                  onChange={(e) => setForm({ ...form, caseName: e.target.value })}
+                />
+              </label>
+
+              <label>
+                RAW image path
+                <input
+                  required
+                  value={form.imagePath}
+                  onChange={(e) => setForm({ ...form, imagePath: e.target.value })}
+                  placeholder={"C:\\Forensics\\synapse-lab-01.raw"}
+                />
+                <small>Quoted Windows paths are accepted.</small>
+              </label>
+
+              <button className="primary" disabled={busy}>
+                {busy ? "Starting…" : "Hash & start scan"}
+              </button>
+            </form>
+
+            {error && <div className="alert bad">{error}</div>}
+          </section>
+
+          <section className="panel">
+            <div className="section-head">
+              <div>
+                <div className="kicker">02 · RESOURCES</div>
+                <h2>Laptop-safe controls</h2>
+              </div>
+            </div>
+
+            <div className="mode-row">
+              <button className="mode active" onClick={() => setWorkers({ io: 1, hash: 2 })}>
+                Laptop
+              </button>
+              <button className="mode" onClick={() => setWorkers({ io: 2, hash: 2 })}>
+                Balanced
+              </button>
+            </div>
+
+            <div className="workers">
+              <label>
+                I/O workers
+                <input
+                  type="number"
+                  min="1"
+                  max="4"
+                  value={workers.io}
+                  onChange={(e) => setWorkers({ ...workers, io: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })}
+                />
+              </label>
+              <label>
+                Hash workers
+                <input
+                  type="number"
+                  min="1"
+                  max="4"
+                  value={workers.hash}
+                  onChange={(e) => setWorkers({ ...workers, hash: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })}
+                />
+              </label>
+            </div>
+
+            <div className="resource-box">
+              <div className="resource-line">
+                <span>CPU</span>
+                <Progress value={resources?.cpu_percent} />
+              </div>
+              <div className="resource-line">
+                <span>RAM</span>
+                <Progress value={resources?.ram_percent} />
+              </div>
+              <div className="recommend">
+                Recommended now: I/O {resources?.recommended_io_workers ?? "—"} · Hash {resources?.recommended_hash_workers ?? "—"}
+              </div>
+            </div>
+          </section>
+        </section>
+
+        {scan && (
+          <>
+            <section className="metric-grid">
+              <Metric label="Status" value={<Pill value={scan.status} tone={tone(scan.status)} />} hint={scan.stage} />
+              <Metric label="Progress" value={`${Number(scan.progress).toFixed(1)}%`} hint={scan.message} />
+              <Metric label="Evidence" value={`${(Number(scan.size_bytes || 0) / 1024 / 1024).toFixed(1)} MB`} hint={`${scan.io_workers} I/O · ${scan.hash_workers} hash`} />
+              <Metric label="Deleted candidates" value={findings.length} hint={`${recoverable.length} regular files`} />
+            </section>
+
+            <section className="panel">
+              <div className="section-head">
+                <div>
+                  <div className="kicker">03 · ANALYSIS</div>
+                  <h2>Pipeline</h2>
+                </div>
+                <span className="mono">{scan.stage}</span>
+              </div>
+
+              <Progress value={scan.progress} />
+
+              <div className="pipeline">
+                {["hash_pre", "inode_scan", "directory_scan", "journal", "artifacts", "findings", "hash_post", "complete"].map((stage) => (
+                  <div key={stage} className={`pipeline-step ${scan.stage === stage ? "active" : ""}`}>
+                    <span className="dot" />
+                    {stage.replaceAll("_", " ")}
+                  </div>
+                ))}
+              </div>
+
+              <div className="status-message">{scan.message || "Waiting…"}</div>
+            </section>
+
+            {final && (
+              <section className="panel">
+                <div className="section-head">
+                  <div>
+                    <div className="kicker">04 · RECOVERY</div>
+                    <h2>Deleted files</h2>
+                    <p>Recovered names and paths are conservative evidence-derived values.</p>
+                  </div>
+
+                  <div className="actions">
+                    <button className="ghost" onClick={selectAll}>Select recoverable</button>
+                    <button className="ghost" onClick={() => setSelected(new Set())}>Clear</button>
+                    <button
+                      className="primary small"
+                      disabled={!selected.size || recovering || scan.status !== "completed"}
+                      onClick={recoverSelected}
+                    >
+                      {recovering ? "Recovering…" : `Recover ${selected.size}`}
+                    </button>
+                  </div>
+                </div>
+
+                {message && <div className="alert good">{message}</div>}
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th />
+                        <th>Inode</th>
+                        <th>Name / path</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Recovery</th>
+                        <th>Validation</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {findings.map((f) => (
+                        <tr key={f.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selected.has(f.id)}
+                              onChange={() => toggle(f.id)}
+                              disabled={!f.recoverable || f.recovery_status === "complete"}
+                            />
+                          </td>
+                          <td className="mono">{f.inode}</td>
+                          <td>
+                            <strong>{f.original_name || f.name}</strong>
+                            <small>{f.original_path || "Path not reconstructed"}</small>
+                          </td>
+                          <td>{f.file_signature || f.file_type}</td>
+                          <td>{Number(f.size_bytes || 0).toLocaleString()} B</td>
+                          <td><Pill value={f.recovery_status || "candidate"} tone={tone(f.recovery_status)} /></td>
+                          <td><Pill value={f.validation_status || "pending"} tone={tone(f.validation_status)} /></td>
+                          <td>
+                            {f.recovered_path ? (
+                              <a className="download" href={api.download(f.id)}>Download</a>
+                            ) : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {!findings.length && <div className="empty">No deleted inode candidates were found.</div>}
+              </section>
+            )}
+
+            <section className="two-col">
+              <section className="panel">
+                <div className="section-head">
+                  <div>
+                    <div className="kicker">05 · INTEGRITY</div>
+                    <h2>Evidence hashes</h2>
+                  </div>
+                </div>
+
+                <div className="hash-box">
+                  <label>Pre-scan SHA-256</label>
+                  <code>{scan.pre_scan_sha256 || "—"}</code>
+                </div>
+                <div className="hash-box">
+                  <label>Post-scan SHA-256</label>
+                  <code>{scan.post_scan_sha256 || "Pending"}</code>
+                </div>
+
+                <div className="integrity-state">
+                  <Pill
+                    value={scan.post_scan_sha256 ? (hashMatch ? "MATCH" : "CHANGED") : "PENDING"}
+                    tone={scan.post_scan_sha256 ? (hashMatch ? "good" : "bad") : "info"}
+                  />
+                  <span>{integrity?.message || "Integrity ledger pending."}</span>
+                </div>
+              </section>
+
+              <section className="panel">
+                <div className="section-head">
+                  <div>
+                    <div className="kicker">06 · REPORT</div>
+                    <h2>Export Lab #02 report</h2>
+                  </div>
+                </div>
+
+                <div className="reports">
+                  <button
+                    className="report"
+                    disabled={refreshing}
+                    onClick={async () => {
+                      setRefreshing(true);
+                      setMessage("");
+                      try {
+                        await api.refreshArtifacts(scan.id);
+                        setMessage("Live artifacts and timeline refreshed. Generate the reports again.");
+                      } catch (e) {
+                        setMessage(e.message);
+                      } finally {
+                        setRefreshing(false);
+                      }
+                    }}
+                  >
+                    {refreshing ? "Refreshing live artifacts…" : "Refresh live artifacts / timeline"}
+                  </button>
+                  <a className="report" href={api.reportJson(scan.id)}>JSON report</a>
+                  <a className="report" href={api.reportDocx(scan.id)}>DOCX report</a>
+                </div>
+
+                <p className="note">
+                  The report contains integrity, filesystem findings, deleted files,
+                  timeline/live-artifact sections, Lab #02 deliverables, metadata-vs-carving,
+                  facts vs hypotheses, limitations and conclusion.
+                </p>
+              </section>
+            </section>
+          </>
+        )}
+      </main>
+
+      <footer>
+        EXT4 Forensics Workbench v0.3.1 · Local-first · Evidence image remains read-only
+      </footer>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/App.jsx">
+import Dashboard from "./pages/Dashboard";export default function App(){return <Dashboard/>}
+</file>
+
+<file path="frontend/src/main.jsx">
+import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./styles.css";
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="crash-screen">
+          <h1>EXT4 Forensics Workbench</h1>
+          <p>The React application hit a runtime error.</p>
+          <pre>{String(this.state.error?.stack || this.state.error)}</pre>
+          <button onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </React.StrictMode>
+);
+</file>
+
+<file path="frontend/src/styles.css">
+*{box-sizing:border-box}
+:root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#152337;background:#eef3f8}
+body{margin:0;min-width:320px}
+button,input{font:inherit}button{cursor:pointer}a{text-decoration:none;color:inherit}
+.topbar{height:68px;background:#081321;color:white;padding:0 28px;display:flex;justify-content:space-between;align-items:center}
+.brand{display:flex;align-items:center;gap:11px}.brand-mark{width:34px;height:34px;background:#2362ef;border-radius:9px;display:grid;place-items:center;font-weight:900}.brand-title{font-size:10px;font-weight:900;letter-spacing:.15em}.brand-subtitle{font-size:12px;color:#aebdd0}.topbar-status{font-size:11px;color:#b6c4d5}.online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#38d39b;margin-right:6px}
+.content{max-width:1380px;margin:auto;padding:25px}.hero{min-height:205px;border-radius:18px;padding:30px;display:flex;align-items:center;justify-content:space-between;color:white;background:linear-gradient(135deg,#10203a,#173b70 72%,#2362ef);box-shadow:0 16px 42px rgba(14,35,70,.17)}.eyebrow,.kicker{font-size:10px;font-weight:900;letter-spacing:.14em}.eyebrow{color:#cbd9ec}.hero h1{font-size:clamp(30px,4vw,50px);margin:8px 0 10px;letter-spacing:-.04em}.hero p{max-width:780px;margin:0;color:#dbe5f3;line-height:1.55}.hero-symbol{width:96px;height:96px;border-radius:25px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.13);display:grid;place-items:center;font-weight:900;letter-spacing:.12em}
+.two-col{display:grid;grid-template-columns:1.3fr .95fr;gap:17px;margin-top:17px}.panel,.metric{background:#fff;border:1px solid #d9e2ec;border-radius:15px;box-shadow:0 7px 23px rgba(17,39,70,.045)}.panel{padding:20px}.section-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.section-head h2{margin:4px 0;font-size:19px}.section-head p{margin:2px 0 0;color:#74869e;font-size:11px}.safety{padding:11px 12px;border-radius:10px;background:#f2f7ff;border:1px solid #d0e0f9;margin:14px 0;display:grid;gap:2px}.safety strong{font-size:11px;color:#345778}.safety span{font-size:10px;color:#71839b}.form{display:grid;gap:12px}.form label,.workers label{display:grid;gap:6px;font-size:11px;font-weight:800;color:#405673}.form small{color:#8a98a9;font-size:9px;font-weight:500}
+input{border:1px solid #cbd6e2;border-radius:9px;padding:10px 11px;outline:none;color:#17304e;background:#fff}input:focus{border-color:#2362ef;box-shadow:0 0 0 3px rgba(35,98,239,.1)}.primary,.ghost,.mode{border:0;border-radius:9px;font-weight:850}.primary{background:#2362ef;color:white;padding:10px 13px}.primary.small{padding:8px 11px}.primary:disabled{opacity:.45;cursor:not-allowed}.ghost{background:#edf2f7;color:#2b425f;padding:8px 10px}.mode-row{display:flex;gap:5px;background:#f0f3f7;padding:4px;border-radius:10px;margin-top:14px}.mode{flex:1;padding:8px;background:transparent;color:#677991}.mode.active{background:#fff;color:#234260;box-shadow:0 2px 8px rgba(20,40,70,.08)}
+.workers{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}.resource-box{margin-top:12px;background:#f7f9fc;border:1px solid #e1e8f0;border-radius:10px;padding:12px}.resource-line{display:grid;grid-template-columns:35px 1fr;align-items:center;gap:8px;margin-top:9px;color:#5a6d85;font-size:10px}.progress-row{display:flex;align-items:center;gap:6px}.progress-track{flex:1;height:8px;background:#e7edf4;border-radius:999px;overflow:hidden}.progress-fill{height:100%;background:#2362ef;border-radius:999px}.progress-row>span{width:38px;text-align:right;font-size:9px;font-weight:900}.recommend{margin-top:9px;color:#8794a6;font-size:9px}
+.pill{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:900;text-transform:uppercase}.pill-good{background:#dcf7ea;color:#17704b}.pill-info{background:#e4ecff;color:#2859aa}.pill-bad{background:#ffe2e2;color:#a13d3d}.pill-neutral{background:#edf1f5;color:#64748a}
+.alert{margin-top:12px;padding:10px 12px;border-radius:9px;font-size:10px}.alert.good{background:#edf9f3;border:1px solid #bfe7d2;color:#176b4b}.alert.bad{background:#fff0f0;border:1px solid #ffd2d2;color:#9f3c3c}
+.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-top:17px}.metric{padding:15px}.metric-label{font-size:9px;font-weight:900;color:#7d8da1;letter-spacing:.09em;text-transform:uppercase}.metric-value{margin-top:6px;font-size:21px;font-weight:900}.metric-hint{margin-top:5px;font-size:9px;color:#8794a5;line-height:1.35}
+.mono{font:10px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#7b8ca2}.pipeline{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-top:14px}.pipeline-step{font-size:8px;color:#9aa6b5;text-align:center;display:grid;gap:5px}.pipeline-step .dot{width:9px;height:9px;border-radius:50%;background:#dfe5ec;margin:auto}.pipeline-step.active{color:#2362ef;font-weight:900}.pipeline-step.active .dot{background:#2362ef;box-shadow:0 0 0 4px rgba(35,98,239,.1)}.status-message{margin-top:11px;padding:10px;background:#f7f9fb;border-radius:9px;color:#63768e;font-size:10px}.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.table-wrap{overflow:auto;margin-top:15px;border:1px solid #dce4ee;border-radius:10px}table{width:100%;min-width:980px;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #eef2f6;text-align:left;font-size:10px}th{font-size:8px;text-transform:uppercase;letter-spacing:.06em;color:#7a899d;background:#f8fafc}td small{display:block;color:#8a97a8;font-size:8px;margin-top:2px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.download{display:inline-flex;padding:5px 8px;border-radius:7px;background:#edf3ff;color:#2362ef;font-size:9px;font-weight:800}.hash-box{background:#f7f9fb;border:1px solid #e1e8ef;border-radius:9px;padding:10px;margin-top:9px}.hash-box label{font-size:8px;font-weight:900;text-transform:uppercase;color:#7b8ca1;letter-spacing:.07em}.hash-box code{display:block;margin-top:5px;font-size:8px;line-height:1.4;word-break:break-all;color:#2a4868}.integrity-state{display:flex;align-items:center;gap:7px;margin-top:10px;color:#667992;font-size:9px}.reports{display:grid;gap:8px;margin-top:12px}.report{display:block;padding:11px;border-radius:9px;background:#f7f9fb;border:1px solid #e0e7ef;color:#2c4968;font-size:11px;font-weight:850}.note{font-size:9px;color:#7f8ea1;line-height:1.45}.empty{min-height:130px;display:grid;place-items:center;align-content:center;color:#75869d;font-size:10px;text-align:center}.crash-screen{max-width:900px;margin:50px auto;padding:24px;background:white;border:1px solid #f4b4b4;border-radius:14px}.crash-screen pre{padding:14px;background:#fff4f4;color:#8b2f2f;white-space:pre-wrap;overflow:auto}.crash-screen button{padding:9px 12px;border:0;border-radius:8px;background:#2362ef;color:white}
+footer{max-width:1380px;margin:auto;padding:18px 25px 27px;color:#8795a6;font-size:9px}
+@media(max-width:1050px){.two-col{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){.content{padding:13px}.topbar{padding:0 14px}.topbar-status{display:none}.hero{padding:23px}.hero-symbol{display:none}.metric-grid{grid-template-columns:1fr}.workers{grid-template-columns:1fr}.pipeline{grid-template-columns:repeat(2,1fr)}.actions{justify-content:flex-start}footer{padding:16px 13px;flex-direction:column;gap:5px}}
+.report{border:0;cursor:pointer;text-align:left;width:100%;font:inherit}
+</file>
+
+<file path="frontend/index.html">
+<!doctype html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>EXT4 Forensics Workbench</title></head>
+<body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>
+</file>
+
+<file path="frontend/package.json">
+{
+  "name": "ext4-forensics-ui",
+  "private": true,
+  "version": "0.3.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.2",
+    "vite": "^7.1.7"
+  }
+}
+</file>
+
+<file path="frontend/vite.config.js">
+import { defineConfig } from "vite"; import react from "@vitejs/plugin-react";
+export default defineConfig({plugins:[react()],server:{port:5173}});
+</file>
+
+<file path="scripts/run_backend.ps1">
+Set-Location "$PSScriptRoot\..\backend"
+if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+  python -m venv .venv
+}
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\uvicorn.exe app.main:app --reload --host 127.0.0.1 --port 8000
+</file>
+
+<file path="scripts/run_backend.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../backend"
+source .venv/bin/activate
+uvicorn app.main:app --reload
+</file>
+
+<file path="scripts/run_frontend.ps1">
+Set-Location "$PSScriptRoot\..\frontend"
+npm install
+npm run dev
+</file>
+
+<file path="scripts/run_frontend.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../frontend"
+npm run dev
+</file>
+
+<file path=".gitignore">
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+backend/.env
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+data/*
+recovered/*
+</file>
+
+<file path="ARCHITECTURE.md">
+# EXT4 Forensics Workbench v0.2
+
+React UI
+  |
+  | localhost JSON API
+  v
+FastAPI backend
+  |
+  +-- SQLite casebook
+  +-- chained integrity ledger (JSONL)
+  +-- resource monitor (psutil)
+  |
+  +-- bounded scan thread pool
+       |
+       +-- streamed SHA-256
+       +-- MBR/GPT partition boundary detection
+       +-- EXT4 superblock/group/inode analysis
+       +-- deleted directory-entry + slack heuristics
+       +-- targeted journal-inode / JBD2 evidence scan
+       +-- pytsk3 cross-check
+       +-- extent/direct-block recovery
+       +-- file signature identification
+       +-- recovered-file SHA-256
+</file>
+
+<file path="README.md">
+# EXT4 Deleted File Recovery Workbench v0.4
+
+Windows-native friendly capstone implementation for Lab #02-style EXT4 disk forensics.
+
+## v0.4 changes
+
+- Robust recursive live-artifact extraction through pytsk3 `open_dir(inode=2)` + `entry.as_directory()`.
+- Reads artifact contents directly from each TSK entry instead of reopening by path.
+- Extracts `.bash_history`, `activity.log`, `meeting-notes.txt`, and `confidential-clients.txt` when present.
+- Parses `activity.log` into semantic events: USB connect/disconnect, archive creation, file open, delete, history clear, login, etc.
+- Parses shell history as sequence-only evidence when timestamps are unavailable.
+- Existing scans can refresh artifact/timeline data without re-running the inode scan.
+- JSON report auto-populates missing artifacts on demand.
+- DOCX report is landscape-oriented to avoid the earlier wide-table wrapping problem.
+- DOCX separates deleted-file findings from long SHA-256 values.
+- Recovered ZIPs are inspected as archives without extracting their members to disk.
+- Recovered files receive printable-string excerpts for report correlation.
+- Complete Lab #02 deliverable structure, facts vs hypotheses, IOC/artefact context, and limitations.
+
+## Windows start
+
+```powershell
+cd "D:\Important documents(studies)\Projects\ext4-forensics-capstone\backend"
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Second terminal:
+
+```powershell
+cd "D:\Important documents(studies)\Projects\ext4-forensics-capstone\frontend"
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+## Existing scan: no rescan required
+
+For an existing scan, the report endpoint now automatically attempts to populate missing live artifacts.
+You can also force-refresh them:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/api/scans/<SCAN_ID>/artifacts/refresh
+```
+
+or:
+
+```powershell
+python scripts/refresh_scan_artifacts.py <SCAN_ID>
+```
+
+Then download JSON/DOCX again.
+
+## Lab #02 evidence boundary
+
+The application does not hard-code Synapse's answer values. It extracts filesystem artifacts from the image and places them into the report. Known-answer values may be used separately to validate a test run.
+
+The tool should say "not extracted" when evidence is not actually present or not successfully read.
+
+## Report contents
+
+The DOCX includes:
+
+1. Mandate
+2. Integrity and SHA-256
+3. Method + resource policy
+4. Filesystem/volume metadata
+5. Deleted-file findings and recovery hashes
+6. All eight Lab #02 deliverables
+7. Full timeline
+8. Live-artifact inventory and excerpts
+9. Recovered content strings and ZIP member analysis
+10. Integrity ledger
+11. Limitations
+12. Conclusion
+
+## Forensic limitation
+
+This is an academic capstone implementation, not a certified forensic suite. Journal handling is targeted JBD2 evidence extraction rather than a complete transaction replay engine. A recorded USB event plus staging/deletion artifacts does not independently prove successful copying to USB or external transmission.
+</file>
+
+<file path="VERSION">
+0.4.3
+</file>
+
+</files>

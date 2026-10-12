@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import os
 from dataclasses import dataclass
@@ -43,6 +42,9 @@ class Settings:
     post_scan_verify: bool
     journal_max_blocks: int
     text_artifact_max_bytes: int
+    groq_api_key: str
+    groq_model: str
+    groq_timeout_seconds: int
 
 def load_settings():
     s=Settings(
@@ -58,6 +60,9 @@ def load_settings():
         post_scan_verify=_bool("POST_SCAN_VERIFY",True),
         journal_max_blocks=_int("JOURNAL_MAX_BLOCKS",8192,100,1000000),
         text_artifact_max_bytes=_int("TEXT_ARTIFACT_MAX_BYTES",1048576,4096,100*1024*1024),
+        groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
+        groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b",
+        groq_timeout_seconds=_int("GROQ_TIMEOUT_SECONDS", 60, 5, 180),
     )
     for p in (s.app_data_dir,s.recovery_dir,s.report_dir,s.integrity_ledger.parent):
         p.mkdir(parents=True,exist_ok=True)

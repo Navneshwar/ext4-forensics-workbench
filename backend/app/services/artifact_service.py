@@ -8,8 +8,13 @@ from app.forensics.pytsk_artifacts import extract_artifacts
 def refresh_artifacts(scan_id: str, force: bool = True) -> dict:
     scan=get_scan(scan_id)
     if not scan: raise ValueError("Scan not found.")
+    try:
+        details = json.loads(_analysis_details(scan, "{}"))
+        fs_offset = int(details["ext4"]["filesystem_offset"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return {"status":"unavailable","message":"Filesystem analysis metadata is not available yet; complete the scan before refreshing artifacts.","files":[],"timeline":[]}
     if force: clear_artifacts(scan_id)
-    payload=extract_artifacts(Path(scan["evidence_path"]), int(json.loads(_analysis_details(scan, "{}"))["ext4"]["filesystem_offset"]))
+    payload=extract_artifacts(Path(scan["evidence_path"]), fs_offset)
     for a in payload.get("files",[]):
         insert_artifact({"id":str(uuid.uuid4()),"scan_id":scan_id,**a,"metadata":{"allocated":a.get("allocated"),"meta_type":a.get("meta_type")}})
     for e in payload.get("timeline",[]):

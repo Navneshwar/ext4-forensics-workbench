@@ -4,9 +4,10 @@ import re
 import zipfile
 import hashlib
 from pathlib import Path
-from app.db.repository import get_scan,list_findings,list_artifacts,list_timeline,list_integrity
+from app.db.repository import get_case,get_scan,list_findings,list_artifacts,list_timeline,list_integrity
 from app.services.integrity_ledger import verify_chain
 from app.services.artifact_service import ensure_artifacts
+from app.services.ai_report_service import generate_ai_report
 
 def _json_row(row):
     d=dict(row)
@@ -38,7 +39,7 @@ def _analyse_zip(path: Path):
 def build_report(scan_id):
     scan=get_scan(scan_id)
     if not scan:raise ValueError("Scan not found.")
-    ensure_artifacts(scan_id)
+    artifact_status = ensure_artifacts(scan_id)
     findings=[_json_row(r) for r in list_findings(scan_id)]
     artifacts=[]
     for r in list_artifacts(scan_id):
@@ -140,15 +141,28 @@ def build_report(scan_id):
         'The activity log and shell history can establish recorded events/commands, but they do not by themselves prove that a file was successfully written to a removable device.',
         'Timeline items derived from shell history are sequence evidence when no timestamp is present and should not be assigned an invented clock time.'
     ]
+    if isinstance(artifact_status, dict) and artifact_status.get("status") in {"error", "unavailable", "partial"}:
+        limitations.append(f'Artifact extraction status: {artifact_status.get("status")}. {artifact_status.get("message") or "Some targeted artifacts may not be available."}')
 
-    return {
-        "report_version":"0.4",
-        "case":{"id":scan["case_id"],"name":scan["case_name"]},
+    case_row = get_case(scan["case_id"])
+    # Reports intentionally expose only the compact case identification fields.
+    # Legacy administrative metadata may remain in SQLite but is omitted here.
+    case_data = {
+        "case_number": (case_row["case_number"] if case_row else None),
+        "name": (case_row["name"] if case_row else scan["case_name"]),
+    }
+    report = {
+        "report_version":"0.5",
+        "case":case_data,
         "evidence":{
             "path":scan["evidence_path"],"size_bytes":scan["size_bytes"],
             "sha256":scan["pre_scan_sha256"],"pre_scan_sha256":scan["pre_scan_sha256"],
             "post_scan_sha256":scan["post_scan_sha256"],
-            "integrity_match":bool(scan["post_scan_sha256"] and scan["post_scan_sha256"]==scan["pre_scan_sha256"])
+            "integrity_match":bool(scan["post_scan_sha256"] and scan["post_scan_sha256"]==scan["pre_scan_sha256"]),
+            "evidence_item_number":scan["evidence_item_number"],"evidence_type":scan["evidence_type"],
+            "description":scan["evidence_description"],"source_device":scan["source_device"],
+            "device_type":scan["device_type"],"device_make_model":scan["device_make_model"],
+            "device_serial_number":scan["device_serial_number"]
         },
         "filesystem":ext4.get("filesystem") if ext4 else None,
         "volume_label":ext4.get("volume_label") if ext4 else None,
@@ -156,6 +170,7 @@ def build_report(scan_id):
         "deleted_files":deleted,
         "timeline":timeline,
         "live_artifacts":artifacts,
+        "artifact_extraction":artifact_status,
         "recovered_content":recovered_content,
         "recovered_archive_analysis":archive_analysis,
         "lab02_deliverables":{
@@ -191,3 +206,5 @@ def build_report(scan_id):
             "resource_policy":{"io_workers":scan["io_workers"],"hash_workers":scan["hash_workers"],"policy":scan["resource_policy"]}
         }
     }
+    report["ai_report"] = generate_ai_report(report, scan_id)
+    return report

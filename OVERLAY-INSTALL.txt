@@ -1,0 +1,54 @@
+EXT4 FORENSICS WORKBENCH v0.5 — OVERLAY INSTALL
+================================================
+
+IMPORTANT: Back up the existing project before applying these changes.
+This archive is a source-code overlay built from the uploaded Repomix text snapshot.
+It intentionally does not include runtime evidence, databases, recovered files,
+generated reports, local secrets, or binary DOCX templates that were not present
+in the snapshot.
+
+APPLY THE OVERLAY
+1. Stop the backend and frontend processes.
+2. Make a backup/copy of the current project folder.
+3. Extract this ZIP directly into the existing project root, allowing source files
+   to be overwritten when prompted. Do not extract it into a nested project folder.
+4. Keep your existing backend/.env, backend/data/casebook.sqlite3,
+   backend/data/integrity-ledger.jsonl, backend/recovered/, backend/reports/,
+   original evidence images, and any binary files/templates. They are not shipped
+   in this archive and should remain in place.
+5. Install/update backend dependencies and restart the backend:
+
+   cd backend
+   python -m pip install -r requirements.txt
+   Copy .env.example to .env only if .env does not already exist.
+   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+6. In another terminal, install frontend dependencies and restart the frontend:
+
+   cd frontend
+   npm install
+   npm run dev
+
+7. Open the local Vite URL printed in the terminal. Backend API docs are at
+   http://127.0.0.1:8000/docs.
+
+GROQ REPORT WRITING (OPTIONAL)
+- Add GROQ_API_KEY=your_key_here to backend/.env. Never put the key in frontend
+  files or frontend/.env.
+- GROQ_MODEL defaults to openai/gpt-oss-20b; configure a model enabled for your
+  Groq account if necessary.
+- When Groq is enabled, bounded structured case/evidence data, findings, timeline
+  entries, hashes, and artifact metadata are sent to the Groq API. The raw disk
+  image bytes and raw artifact-content bodies are not sent by this report service.
+  Assess your organization's confidentiality and data-processing requirements
+  before enabling an external provider.
+- If Groq is not configured or fails, exports use a clearly labelled local
+  fallback narrative. Have a qualified examiner review all generated narrative.
+
+DATA AND FORENSIC CAUTION
+- The database migration is designed to retain existing records while adding
+  metadata columns. Back up the database and ledger before upgrading regardless.
+- Verify original image hashes and follow your lab's approved acquisition and
+  chain-of-custody procedures. This academic tool is not a validated commercial
+  forensic product. Generated interpretations are not a substitute for examiner
+  review.

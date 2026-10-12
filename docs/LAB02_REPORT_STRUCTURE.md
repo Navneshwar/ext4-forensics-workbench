@@ -1,27 +1,30 @@
-# Lab #02 report structure in v0.4
+# Forensic report structure in v0.5
 
-The generated report follows the lab's requested six beats:
+The report keeps the existing Lab #02 deliverables and adds an examiner-oriented cover and narrative:
 
-1. Mandate
-2. Integrity
-3. Method
-4. Findings
-5. Limits
-6. Conclusion
+1. Case identification and evidence intake details
+2. Executive summary
+3. Investigation objectives and scope/methodology overview
+4. Mandate
+5. Image integrity and SHA-256 comparison
+6. Method and resource policy
+7. Filesystem and volume findings
+8. Deleted-file findings and recovered-file hashes
+9. Existing Lab #02 deliverables, including USB/archive evidence, confidential-document candidates, metadata recovery versus carving, and facts versus hypotheses
+10. Timeline and live artifact inventory/content excerpts
+11. Recovered-content strings and recovered-ZIP member analysis
+12. Integrity ledger, timeline assessment, interpretation/alternative explanations, limitations, conclusion, and recommendations
 
-It also explicitly answers the eight deliverables:
+The streamlined intake captures the case number and title, evidence item/type, image path, optional description, and optional source-device identifiers. Expanded administrative, acquisition, custody, and incident-context fields are intentionally omitted from the UI and report.
 
-1. image SHA-256
-2. filesystem + volume label
-3. deleted files + inode numbers
-4. USB connection time
-5. archive creation time
-6. confidential document + recovery method
-7. metadata recovery vs carving
-8. facts vs hypotheses
+## Groq narrative generation
 
-The application adds live-artifact inventory, timeline rows, recovered-content strings, and recovered-ZIP member analysis so the report can show supporting evidence rather than just the final answer.
+When `GROQ_API_KEY` is configured, the backend asks the configured Groq model to draft executive summary, objectives, scope/methodology, key findings, timeline assessment, interpretation, conclusion, recommendations, and limitations from structured case data and bounded examination summaries. The disk image bytes and raw artifact-content bodies are not sent. The output is cached by the structured input digest, carries generation status/model metadata, and must be reviewed by the examiner. With no key or on an API error, the report contains a labelled local fallback narrative and the export still succeeds.
 
-## v0.4 implementation note
+## Evidence boundary
 
-The artifact extractor uses pytsk3's root-directory traversal and reads file contents directly from each directory entry. This avoids the path-reopen failure mode that caused empty artifact sections in the earlier report.
+The model prompt instructs it not to invent timestamps, identities, or actions; to distinguish facts from hypotheses; and not to describe USB/archive correlations as proof of successful exfiltration. A timestamp-free shell-history row remains sequence evidence. Narrative statements do not replace the technical evidence tables.
+
+## Implementation note
+
+Artifact extraction uses pytsk3's root-directory traversal and reads file contents directly from each directory entry. An artifact refresh that cannot access filesystem analysis metadata reports an unavailable status rather than breaking report export.

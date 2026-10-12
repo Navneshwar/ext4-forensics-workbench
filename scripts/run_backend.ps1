@@ -1,4 +1,3 @@
-
 Set-Location "$PSScriptRoot\..\backend"
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
   python -m venv .venv

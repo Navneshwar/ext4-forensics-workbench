@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import struct
 from dataclasses import dataclass
@@ -20,6 +19,8 @@ class Superblock:
     feature_compat:int;feature_incompat:int;feature_ro_compat:int;journal_inum:int;desc_size:int;label:str;uuid:str
     @property
     def groups(self):return (self.blocks_count+self.blocks_per_group-1)//self.blocks_per_group
+    @property
+    def magic(self):return EXT4_MAGIC
 def parse_superblock(data,offset=0):
     if len(data)<256 or u16(data,56)!=EXT4_MAGIC:raise ValueError("EXT4 superblock not found")
     log=u32(data,24);blocks=u32(data,4)|(u32(data,336)<<32 if len(data)>=340 else 0)
@@ -46,6 +47,8 @@ def group_inode_table(fh,sb,fs_offset,group):
 class Inode:
     inode:int;group:int;offset:int;mode:int;size:int;deletion_time:int;links_count:int;flags:int;file_type:str
     uid:int;gid:int;atime:int;mtime:int;ctime:int;crtime:int
+    @property
+    def is_deleted(self):return bool(self.deletion_time and self.links_count == 0)
     @property
     def dtime(self):return iso(self.deletion_time)
     @property

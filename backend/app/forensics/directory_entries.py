@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 from dataclasses import dataclass
 from app.forensics.ext4_structs import EXT4_EXTENTS_FL,extents,legacy_blocks
@@ -85,3 +84,5 @@ def build_index(reader,sb,fs_offset,directories):
                 names.setdefault(e.inode,[]).append({"name":e.name,"parent_inode":e.parent_inode,"source":e.source,"offset":e.offset})
                 children_by_parent.setdefault(e.parent_inode,[]).append(e)
     return {"names_by_inode":names,"children_by_parent":children_by_parent}
+# Compatibility alias retained for earlier callers/tests.
+parse_dir_block = parse_block

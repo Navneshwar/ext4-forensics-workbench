@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -30,3 +29,5 @@ def identify(data):
     printable=sum(1 for b in sample if b in (9,10,13) or 32<=b<=126)
     if printable/max(1,len(sample))>.92:return FileSignature("Likely text",".txt","text/plain","medium")
     return FileSignature("Binary data",".bin","application/octet-stream","low")
+# Compatibility alias retained for earlier callers.
+identify_bytes = identify

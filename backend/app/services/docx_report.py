@@ -60,10 +60,41 @@ def generate_docx(scan_id,output_path=None):
     doc.styles["Heading 1"].font.name="Aptos Display";doc.styles["Heading 1"].font.size=Pt(16)
     doc.styles["Heading 2"].font.name="Aptos";doc.styles["Heading 2"].font.size=Pt(11)
 
-    p=doc.add_paragraph(style="Title");p.alignment=WD_ALIGN_PARAGRAPH.CENTER;p.add_run("EXT4 Deleted File Recovery Report")
-    p=doc.add_paragraph();p.alignment=WD_ALIGN_PARAGRAPH.CENTER;r=p.add_run(xml_safe("Lab #02 · Project ORION · Machine-generated forensic work product"));r.bold=True;r.font.size=Pt(11)
+    case = report.get("case", {}) or {}
+    evidence = report.get("evidence", {}) or {}
+    ai = report.get("ai_report", {}) or {}
+    generation = ai.get("generation", {}) or {}
+    p=doc.add_paragraph(style="Title");p.alignment=WD_ALIGN_PARAGRAPH.CENTER;p.add_run("Cyber Forensic Examination Report")
+    subtitle = "Confidential forensic work product · Examiner review required"
+    p=doc.add_paragraph();p.alignment=WD_ALIGN_PARAGRAPH.CENTER;r=p.add_run(xml_safe(subtitle));r.bold=True;r.font.size=Pt(11)
 
-    doc.add_heading("1. Mandate",1);doc.add_paragraph("Scope: preserve and analyze the supplied RAW image, identify EXT4, recover deleted files, reconstruct a defensible chronology from artifacts, and clearly separate facts from hypotheses.")
+    doc.add_heading("Case identification and evidence details",1)
+    add_table(doc,["Field","Recorded value"],[
+        ("Case number",case.get("case_number") or "Not supplied"),
+        ("Case title",case.get("name") or scan_id),
+        ("Evidence item",evidence.get("evidence_item_number") or "Not assigned"),
+        ("Evidence type",evidence.get("evidence_type") or "Not supplied"),
+        ("Evidence description",evidence.get("description") or "Not supplied"),
+        ("Source device / asset ID",evidence.get("source_device") or "Not supplied"),
+        ("Device type",evidence.get("device_type") or "Not supplied"),
+        ("Device make / model",evidence.get("device_make_model") or "Not supplied"),
+        ("Device serial number",evidence.get("device_serial_number") or "Not supplied"),
+    ],[2.4,7.8])
+
+    doc.add_heading("Executive summary",1)
+    doc.add_paragraph(xml_safe(ai.get("executive_summary") or "A structured forensic analysis was performed. Review the technical findings, evidence integrity, and limitations in this report before drawing conclusions."))
+    p=doc.add_paragraph();p.add_run("Narrative status: ").bold=True
+    p.add_run(xml_safe(f'{generation.get("status", "fallback").replace("_", " ").title()} · {generation.get("message", "Examiner review is required.")}'))
+    if ai.get("investigation_objectives"):
+        doc.add_heading("Investigation objectives",2);doc.add_paragraph(xml_safe(ai["investigation_objectives"]))
+    if ai.get("scope_and_methodology"):
+        doc.add_heading("Scope and methodology overview",2);doc.add_paragraph(xml_safe(ai["scope_and_methodology"]))
+    if ai.get("key_findings"):
+        doc.add_heading("Key findings at a glance",2)
+        for finding in ai["key_findings"]: bullet(doc, finding)
+
+    doc.add_heading("1. Examination objective",1)
+    doc.add_paragraph("Preserve and analyze the supplied evidence image, examine supported EXT4 metadata, assess deleted-file candidates, review extracted artifacts, document evidence integrity, and distinguish observed facts from hypotheses.")
     doc.add_heading("2. Integrity",1)
     add_table(doc,["Item","Value"],[("Evidence path",report["evidence"]["path"]),("Size",f'{report["evidence"]["size_bytes"]:,} bytes'),("Pre-scan SHA-256",report["evidence"]["pre_scan_sha256"]),("Post-scan SHA-256",report["evidence"]["post_scan_sha256"] or "Pending"),("Integrity result","MATCH" if report["evidence"]["integrity_match"] else "NOT VERIFIED / CHANGED")],[1.8,8.4])
     doc.add_heading("3. Method",1);doc.add_paragraph("The workbench uses streamed read-only image access, bounded I/O/hash workers, EXT4 superblock/group/inode analysis, directory metadata reconstruction, targeted JBD2 inspection, pytsk3 cross-checking, metadata-based recovery, file-signature detection, recovered-file SHA-256, and a local chained integrity ledger.")
@@ -119,11 +150,20 @@ def generate_docx(scan_id,output_path=None):
 
     doc.add_heading("10. Integrity ledger",1);doc.add_paragraph(report["integrity_ledger"]["message"])
     for e in report.get("integrity_events",[]):doc.add_paragraph(f'{e["created_at"]} · {e["event_type"]} · {e.get("algorithm") or ""} · {e.get("value") or ""}')
+    if ai.get("timeline_analysis"):
+        doc.add_heading("Timeline assessment",1);doc.add_paragraph(xml_safe(ai["timeline_analysis"]))
+    if ai.get("interpretation"):
+        doc.add_heading("Interpretation and alternative explanations",1);doc.add_paragraph(xml_safe(ai["interpretation"]))
     doc.add_heading("11. Limitations",1)
     for x in report.get("limitations",[]):bullet(doc,x)
+    for x in ai.get("limitations",[]):
+        if x not in report.get("limitations",[]):bullet(doc,x)
     doc.add_heading("12. Conclusion",1)
-    doc.add_paragraph("The image and its recoverable EXT4 artefacts establish the filesystem structure, deleted files, recovered content, and recorded timeline events shown above. Interpretive statements are kept separate: a USB connection, staged archive, deleted files or shell-history clearing may support an exfiltration hypothesis, but these artefacts alone do not prove successful copying to the USB device or external transmission.")
+    doc.add_paragraph(xml_safe(ai.get("conclusion") or "Conclusions are limited to artifacts extracted and validated during this examination. Review the technical findings and preserve the evidence image and hash values for independent verification."))
+    if ai.get("recommendations"):
+        doc.add_heading("Recommendations and next steps",1)
+        for item in ai["recommendations"]:bullet(doc,item)
 
-    foot=sec.footer.paragraphs[0];foot.alignment=WD_ALIGN_PARAGRAPH.CENTER;foot.add_run(xml_safe("EXT4 Forensics Workbench v0.4.3 · Local forensic work product"))
+    foot=sec.footer.paragraphs[0];foot.alignment=WD_ALIGN_PARAGRAPH.CENTER;foot.add_run(xml_safe("EXT4 Forensics Workbench v0.5 · Confidential forensic work product · Examiner review required"))
     doc.save(out)
     return str(out)

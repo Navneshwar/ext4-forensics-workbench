@@ -1,13 +1,28 @@
 from pathlib import Path
 from unittest.mock import patch
+from docx import Document
 from app.services import docx_report
 
 def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
     report = {
+        "case": {
+            "case_number": "CF-REPORT-1", "name": "Minimal report",
+            "case_reference": "SECRET-TICKET", "investigation_type": "Old type",
+            "lead_investigator": "Old examiner", "jurisdiction": "Old region",
+            "incident_summary": "OLD INCIDENT SUMMARY", "scope": "OLD SCOPE",
+        },
         "evidence": {
             "path": "test.raw", "size_bytes": 1024,
             "pre_scan_sha256": "a"*64, "post_scan_sha256": "a"*64,
-            "integrity_match": True
+            "integrity_match": True, "evidence_item_number": "EVD-REPORT-1",
+            "evidence_type": "Disk image", "description": "Simple evidence item",
+            "source_device": "HOST-1", "device_type": "Workstation",
+            "device_make_model": "Vendor Model", "device_serial_number": "SERIAL-1",
+            "device_owner": "OLD CUSTODIAN", "acquisition_method": "OLD ACQUISITION METHOD",
+            "acquisition_tool": "OLD TOOL", "acquisition_operator": "OLD OPERATOR",
+            "acquisition_datetime": "OLD ACQUISITION DATE", "received_datetime": "OLD RECEIVED DATE",
+            "received_by": "OLD RECEIVED BY", "evidence_location": "OLD LOCKER",
+            "chain_of_custody_notes": "OLD CUSTODY NOTES",
         },
         "tooling": {"resource_policy": {"io_workers": 1, "hash_workers": 1, "policy": "laptop"}},
         "filesystem": "ext4", "volume_label": "TEST",
@@ -48,3 +63,14 @@ def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
         docx_report.generate_docx("12345678-test", out)
     assert out.exists()
     assert out.stat().st_size > 0
+    generated = Document(out)
+    rendered = "\n".join(
+        [paragraph.text for paragraph in generated.paragraphs]
+        + [cell.text for table in generated.tables for row in table.rows for cell in row.cells]
+    )
+    assert "CF-REPORT-1" in rendered
+    assert "EVD-REPORT-1" in rendered
+    for omitted in ("SECRET-TICKET", "OLD INCIDENT SUMMARY", "OLD SCOPE", "OLD CUSTODIAN",
+                    "OLD ACQUISITION METHOD", "OLD TOOL", "OLD OPERATOR", "OLD RECEIVED DATE",
+                    "OLD RECEIVED BY", "OLD LOCKER", "OLD CUSTODY NOTES"):
+        assert omitted not in rendered
