@@ -1,4 +1,4 @@
-# Forensic report structure in v0.5
+# Forensic report structure in v0.5.2
 
 The report keeps the existing Lab #02 deliverables and adds an examiner-oriented cover and narrative:
 
@@ -28,3 +28,10 @@ The model prompt instructs it not to invent timestamps, identities, or actions; 
 ## Implementation note
 
 Artifact extraction uses pytsk3's root-directory traversal and reads file contents directly from each directory entry. An artifact refresh that cannot access filesystem analysis metadata reports an unavailable status rather than breaking report export.
+
+
+## Report layout and methodology improvements in v0.5.2
+
+The DOCX export uses A4 portrait pages with consistent margins, branded section headings, repeating table headers, a case/evidence summary, integrity status, and page numbering. The timestamped activity-log events are visualized as a timeline diagram; shell-history commands without timestamps appear in a separate sequence-only table and are never assigned inferred times. Evidence tables use readable field-specific widths, with raw binary archive data omitted from narrative excerpts.
+
+The method section documents the examination stages: (1) input handling and SHA-256 baseline hashing; (2) read-only streamed access and EXT4 filesystem/superblock discovery; (3) inode, directory-entry and name/path reconstruction; (4) targeted artifact extraction, activity-log parsing and shell-history sequencing; (5) metadata-based deleted-file recovery, file-signature identification and recovered-output validation; and (6) post-scan hash comparison, cross-checks and integrity-ledger recording. It also explains the difference between metadata-based recovery and signature carving, and states the limitations of the JBD2 inspection and lack of proof of a successful USB write.

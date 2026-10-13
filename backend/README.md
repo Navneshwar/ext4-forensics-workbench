@@ -1,4 +1,4 @@
-# EXT4 Forensics Workbench — Backend
+# EXT4 Forensics Workbench — Backend v0.5.2
 
 FastAPI backend for an academic EXT4 deleted-file examination workbench. Existing scans use the local filesystem parser and SQLite casebook; report narrative generation is optionally assisted by Groq.
 
@@ -27,6 +27,10 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 API documentation is available at `http://127.0.0.1:8000/docs`. The frontend's `VITE_API_BASE` can override the default API URL.
+
+## DOCX report layout (v0.5.2)
+
+DOCX exports use A4 portrait layout, page headers/footers, stylized findings tables, and an embedded diagram of timestamped activity-log events. The method section explains the actual read-only scanning and recovery implementation, including SHA-256 integrity checks, EXT4 inode/directory parsing, artifact timeline extraction, retained-block recovery, signature identification, and recovered-output validation. Install `Pillow` from `requirements.txt` to render the timeline graphic.
 
 ## Report generation and Groq
 

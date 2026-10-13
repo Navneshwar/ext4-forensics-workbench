@@ -1,6 +1,12 @@
-# EXT4 Forensics Workbench v0.5
+# EXT4 Forensics Workbench v0.5.2
 
 Windows-friendly academic cyber-forensics workbench for EXT4 deleted-file analysis. The app provides a tabbed, guided examiner workflow, stores case and evidence intake metadata in SQLite, preserves the original image's read-only scanning behavior, and exports structured JSON plus a detailed DOCX examination report.
+
+## What's new in v0.5.2
+
+- A4 portrait DOCX report design with consistent margins, page numbering, styled evidence tables, and a visual event timeline.
+- Expanded technical methodology explaining read-only source-image handling, pre/post SHA-256 checks, EXT4 metadata scanning, artifact extraction, metadata-guided deleted-file recovery, validation, and the scope limits of signature checks/JBD2 inspection.
+- Timestamped activity-log events are displayed in a timeline diagram; shell commands without timestamps stay in a separate sequence-only table. Supporting artifact excerpts avoid dumping raw binary archive content.
 
 ## What's new in v0.5
 

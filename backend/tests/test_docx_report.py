@@ -47,7 +47,10 @@ def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
             "7_icat_vs_carving": {"metadata_recovery": "x", "carving": "y"},
             "8_facts_and_hypotheses": {"facts": [], "hypotheses": []}
         },
-        "timeline": [],
+        "timeline": [
+            {"timestamp": "2026-06-18T09:06:41+02:00", "local_time": "2026-06-18T09:06:41+02:00", "source": "/var/log/activity.log", "event": "usb_connected", "details": "action=connected label=TRANSFER"},
+            {"timestamp": "2026-06-18T09:11:08+02:00", "local_time": "2026-06-18T09:11:08+02:00", "source": "/var/log/activity.log", "event": "archive_created", "details": "path=/home/alex/Downloads/orion-export.zip"},
+        ],
         "live_artifacts": [{
             "path": "/var/log/activity.log", "inode": 31, "size_bytes": 500,
             "mtime": None, "content_sha256": "c"*64, "content": "sample"
@@ -56,7 +59,13 @@ def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
         "recovered_archive_analysis": None,
         "integrity_ledger": {"message": "Ledger verified (1 event)."},
         "integrity_events": [],
-        "limitations": []
+        "limitations": [],
+        "ai_report": {
+            "executive_summary": "Summary.",
+            "timeline_analysis": "The activity log records the two timestamped events.",
+            "key_findings": ["A candidate was identified."],
+        },
+        "scan_id": "12345678-test"
     }
     out = tmp_path / "report.docx"
     with patch.object(docx_report, "build_report", return_value=report):
@@ -70,6 +79,12 @@ def test_docx_handles_sqlite_artifact_and_optional_recovery_fields(tmp_path):
     )
     assert "CF-REPORT-1" in rendered
     assert "EVD-REPORT-1" in rendered
+    assert "Examination method" in rendered
+    assert "read-only workflow" in rendered
+    assert "Timeline assessment" in rendered
+    assert len(generated.inline_shapes) >= 1
+    assert abs(generated.sections[0].page_width - 7560000) < 500
+    assert abs(generated.sections[0].page_height - 10692000) < 500
     for omitted in ("SECRET-TICKET", "OLD INCIDENT SUMMARY", "OLD SCOPE", "OLD CUSTODIAN",
                     "OLD ACQUISITION METHOD", "OLD TOOL", "OLD OPERATOR", "OLD RECEIVED DATE",
                     "OLD RECEIVED BY", "OLD LOCKER", "OLD CUSTODY NOTES"):

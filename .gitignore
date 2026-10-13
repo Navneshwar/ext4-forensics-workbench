@@ -1,70 +1,12 @@
-# Python bytecode and interpreter caches
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-
-# Backend virtual environment
-/backend/.venv/
-/backend/venv/
-/backend/ENV/
-/backend/env/
-
-# Environment variables and secrets (keep example templates tracked)
-.env
-.env.*
-!.env.example
-
-# Frontend dependencies and generated build output
-/frontend/node_modules/
-/frontend/dist/
-/frontend/.vite/
-/frontend/coverage/
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-
-# Local forensic case data, databases, and integrity ledger
-/backend-data/
-/data/
-/recovered/
-/reports/
-/backend/data/*
-!backend/data/.gitkeep
-/backend/recovered/*
-!backend/recovered/.gitkeep
-/backend/reports/*
-!backend/reports/.gitkeep
-*.sqlite
-*.sqlite3
-*.sqlite3-*
-*.db
-
-# Local evidence images and forensic acquisition files; do not commit evidence
-/evidence/
-*.dd
-*.raw
-*.img
-*.E01
-*.e01
-*.001
-*.vmdk
-*.vhd
-*.vhdx
-*.qcow2
-
-# Logs, temporary files, and operating-system clutter
-*.log
-*.tmp
-*.temp
-.DS_Store
-Thumbs.db
-
-# Editor / IDE local state
-.idea/
-.vscode/
+.venv/
+node_modules/
+dist/
+backend/.env
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+backend/data/integrity-ledger.jsonl
+backend/recovered/*
+backend/reports/*
